@@ -42,7 +42,8 @@ enum connstate {
 	HANDSHAKEV10,
 	LOGINOK,
 	INPUT,
-	QUERY_ERR
+	QUERY_ERR,
+	QUIT
 };
 
 typedef struct _connection {
@@ -264,9 +265,11 @@ handle_packet(connection *conn)
 			break;
 		case INPUT:
 			switch (conn->pkt->buf[0]) {
+				case COM_QUIT:
+					conn->state = QUIT;
+					break;
 				case COM_QUERY: {
 					char *q = recv_comquery(conn->pkt);
-					printf("q: %s\n", q);
 					if (q != NULL)
 						free(q);
 					conn->state = QUERY_ERR;
@@ -313,6 +316,17 @@ dispatch_connection(connection *conn, dispatcher *self)
 					conn->sqlstate, conn->errmsg);
 			conn->state = INPUT;
 			break;
+		case QUIT:
+			/* take the easy way: just close the connection */
+			closedconnections++;
+			close(conn->sock);
+
+			/* flag this connection as no longer in use */
+			conn->takenby = -1;
+
+			gettimeofday(&stop, NULL);
+			self->ticks += timediff(start, stop);
+			return 0;
 		default:
 			if (conn->pkt == NULL)
 				conn->pkt = packetbuf_recv_hdr(conn->sock);
