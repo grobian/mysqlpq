@@ -99,8 +99,8 @@ do_usage(int exitcode)
 }
 
 enum rmode {
-	NORMAL,
-	DEBUG
+	mNORMAL,
+	mDEBUG
 };
 
 int
@@ -115,7 +115,7 @@ main(int argc, char * const argv[])
 	unsigned short listenport = 3306;
 	int batchsize = 2500;
 	int queuesize = 25000;
-	enum rmode mode = NORMAL;
+	enum rmode mode = mNORMAL;
 	int ch;
 	char nowbuf[24];
 
@@ -128,7 +128,7 @@ main(int argc, char * const argv[])
 				do_version();
 				break;
 			case 'd':
-				mode = DEBUG;
+				mode = mDEBUG;
 				break;
 			case 'f':
 				routes = optarg;
@@ -198,7 +198,7 @@ main(int argc, char * const argv[])
 	fprintf(stdout, "    workers = %d\n", workercnt);
 	fprintf(stdout, "    send batch size = %d\n", batchsize);
 	fprintf(stdout, "    server queue size = %d\n", queuesize);
-	if (mode == DEBUG)
+	if (mode == mDEBUG)
 		fprintf(stdout, "    debug = true\n");
 	fprintf(stdout, "    routes configuration = %s\n", routes);
 	fprintf(stdout, "\n");

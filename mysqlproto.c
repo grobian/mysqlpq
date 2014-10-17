@@ -21,26 +21,15 @@
 #include <errno.h>
 #include <sys/socket.h>
 
+#include "mysqlpq.h"
+#include "mysqlproto.h"
+
 /* lame implementation of just about what we need */
 
 typedef struct {
-	char len[3];
-	char seq;
+	unsigned char len[3];
+	unsigned char seq;
 } mysql_packet_hdr;
-
-typedef struct {
-	char *buf;
-	char *pos;
-	size_t size;
-	size_t len;
-} packetbuf;
-
-#define COM_QUIT_STR "\x01\x00\x00\x00\x01"
-
-#define COM_QUIT     0x01
-#define COM_QUERY    0x03
-#define COM_CONNECT  0x0b
-#define COM_PING     0x0e
 
 
 static packetbuf *
@@ -72,7 +61,7 @@ packetbuf_realloc(packetbuf *buf, size_t len)
 	if (buf->size - buf->len < len) {
 		size_t newsize = sizeof(mysql_packet_hdr) + buf->size + len;
 		size_t oldpos = buf->pos - buf->buf;
-		char *newbuf = realloc(
+		unsigned char *newbuf = realloc(
 				buf->buf == NULL ?
 					buf->buf :
 					buf->buf - sizeof(mysql_packet_hdr),
@@ -92,7 +81,7 @@ packetbuf_realloc(packetbuf *buf, size_t len)
 	return buf;
 }
 
-static void
+void
 packetbuf_free(packetbuf *buf)
 {
 	if (buf->buf)
@@ -116,8 +105,22 @@ packetbuf_get(void)
 	return packetbuf_realloc(ret, 4);
 }
 
-static int
-packetbuf_send(packetbuf *buf, int fd)
+inline int
+packetbuf_hdr_len(packetbuf *buf)
+{
+	mysql_packet_hdr *hdr = (void *)(buf->buf - sizeof(mysql_packet_hdr));
+	return hdr->len[0] + (hdr->len[1] << 8) + (hdr->len[2] << 16);
+}
+
+inline char
+packetbuf_hdr_seq(packetbuf *buf)
+{
+	mysql_packet_hdr *hdr = (void *)(buf->buf - sizeof(mysql_packet_hdr));
+	return hdr->seq;
+}
+
+int
+packetbuf_send(packetbuf *buf, char seq, int fd)
 {
 	/* fill in the reserved bytes before buf */
 	mysql_packet_hdr *hdr = (void *)(buf->buf - sizeof(mysql_packet_hdr));
@@ -127,35 +130,54 @@ packetbuf_send(packetbuf *buf, int fd)
 	hdr->len[0] = buf->len & 0xFF;
 	hdr->len[1] = (buf->len >> 8) & 0xFF;
 	hdr->len[2] = (buf->len >> 16) & 0xFF;
-	hdr->seq = 0x00;
+	hdr->seq = seq;
 
 	return write(fd, hdr, sizeof(mysql_packet_hdr) + buf->len);
 }
 
-static packetbuf *
-packetbuf_recv(int fd)
+packetbuf *
+packetbuf_recv_hdr(int fd)
 {
 	packetbuf *ret = packetbuf_get();
 	mysql_packet_hdr *hdr = (void *)(ret->buf - sizeof(mysql_packet_hdr));
 
 	if (read(fd, hdr, sizeof(mysql_packet_hdr)) != sizeof(mysql_packet_hdr)) {
-		fprintf(stderr, "failed to read mysql package header\n");
-		packetbuf_free(ret);
-		return NULL;
-	}
-
-	/* we don't support sequences here, just assume all is in one pkg */
-	ret->len = hdr->len[0] + (hdr->len[1] << 8) + (hdr->len[2] << 16);
-
-	packetbuf_realloc(ret, ret->len);
-	if (read(fd, ret->buf, ret->len) != ret->len) {
-		fprintf(stderr, "failed to read full mysql package of %zd bytes\n",
-				ret->len);
 		packetbuf_free(ret);
 		return NULL;
 	}
 
 	return ret;
+}
+
+/* call this function as long as it returns 0, if -1 an error occurred,
+ * else its the size of the completed packet */
+int
+packetbuf_recv_data(packetbuf *buf, int fd)
+{
+	int wantlen = packetbuf_hdr_len(buf);
+	ssize_t readlen;
+
+	packetbuf_realloc(buf, wantlen);
+
+	wantlen -= buf->len;
+	readlen = read(fd, buf->buf + buf->len, wantlen);
+
+	if (readlen == wantlen) {
+		return buf->len += readlen;
+	} else if ((readlen == -1 &&
+			(errno == EINTR ||
+			 errno == EAGAIN ||
+			 errno == EWOULDBLOCK)) ||
+			readlen < wantlen)
+	{
+		/* partial data */
+		if (readlen > 0)
+			buf->len += readlen;
+		return 0;
+	} else {
+		/* unexpected EOF or error */
+		return -1;
+	}
 }
 
 static packetbuf *
@@ -164,6 +186,16 @@ packetbuf_push(packetbuf *buf, void *data, size_t len)
 	packetbuf_realloc(buf, len);
 
 	memcpy(buf->pos, data, len);
+#ifdef DEBUG
+	{
+		int i;
+		printf("packetbuf_push(%zd):", len);
+		for (i = 0; i < len; i++) {
+			printf(" %02x", buf->pos[i]);
+		}
+		printf("\n");
+	}
+#endif
 	buf->pos += len;
 	buf->len += len;
 
@@ -173,11 +205,26 @@ packetbuf_push(packetbuf *buf, void *data, size_t len)
 static packetbuf *
 packetbuf_shift(packetbuf *buf, void *ptr, size_t len)
 {
-	if (len > (buf->len - (buf->pos - buf->buf))) {
+	size_t avail = buf->len - (buf->pos - buf->buf);
+	if (avail == 0 || len > avail) {
+#ifdef DEBUG
+		printf("packetbuf_shift(%zd): insufficient data (%zd)\n",
+				len, buf->len - (buf->pos - buf->buf));
+#endif
 		return NULL;  /* FIXME: return code? */
 	}
 
 	memcpy(ptr, buf->pos, len);
+#ifdef DEBUG
+	{
+		int i;
+		printf("packetbuf_shift(%zd):", len);
+		for (i = 0; i < len; i++) {
+			printf(" %02x", buf->pos[i]);
+		}
+		printf("\n");
+	}
+#endif
 	buf->pos += len;
 
 	return buf;
@@ -185,81 +232,81 @@ packetbuf_shift(packetbuf *buf, void *ptr, size_t len)
 
 
 /* all LSB */
-packetbuf *
+static packetbuf *
 push_int1(packetbuf *buf, char val)
 {
 	return packetbuf_push(buf, &val, 1);
 }
 
-packetbuf *
+static packetbuf *
 push_int2(packetbuf *buf, short val)
 {
 	char vb[2];
 
 	vb[0] = val & 0xFF;
-	vb[1] = (val >> 8) && 0xFF;
+	vb[1] = ((unsigned short)val >> 8) & 0xFF;
 
 	return packetbuf_push(buf, vb, sizeof(vb));
 }
 
-packetbuf *
+static packetbuf *
 push_int3(packetbuf *buf, int val)
 {
 	char vb[3];
 
 	vb[0] = val & 0xFF;
-	vb[1] = (val >> 8) && 0xFF;
-	vb[2] = (val >> 16) && 0xFF;
+	vb[1] = (val >> 8) & 0xFF;
+	vb[2] = (val >> 16) & 0xFF;
 
 	return packetbuf_push(buf, vb, sizeof(vb));
 }
 
-packetbuf *
+static packetbuf *
 push_int4(packetbuf *buf, int val)
 {
 	char vb[4];
 
 	vb[0] = val & 0xFF;
-	vb[1] = (val >> 8) && 0xFF;
-	vb[2] = (val >> 16) && 0xFF;
-	vb[3] = (val >> 24) && 0xFF;
+	vb[1] = (val >> 8) & 0xFF;
+	vb[2] = (val >> 16) & 0xFF;
+	vb[3] = ((unsigned int)val >> 24) & 0xFF;
 
 	return packetbuf_push(buf, vb, sizeof(vb));
 }
 
-packetbuf *
+static packetbuf *
 push_int6(packetbuf *buf, long long int val)
 {
 	char vb[6];
 
 	vb[0] = val & 0xFF;
-	vb[1] = (val >> 8) && 0xFF;
-	vb[2] = (val >> 16) && 0xFF;
-	vb[3] = (val >> 24) && 0xFF;
-	vb[4] = (val >> 32) && 0xFF;
-	vb[5] = (val >> 40) && 0xFF;
+	vb[1] = (val >> 8) & 0xFF;
+	vb[2] = (val >> 16) & 0xFF;
+	vb[3] = (val >> 24) & 0xFF;
+	vb[4] = (val >> 32) & 0xFF;
+	vb[5] = (val >> 40) & 0xFF;
 
 	return packetbuf_push(buf, vb, sizeof(vb));
 }
 
-packetbuf *
+static packetbuf *
 push_int8(packetbuf *buf, long long int val)
 {
 	char vb[8];
 
 	vb[0] = val & 0xFF;
-	vb[1] = (val >> 8) && 0xFF;
-	vb[2] = (val >> 16) && 0xFF;
-	vb[3] = (val >> 24) && 0xFF;
-	vb[4] = (val >> 32) && 0xFF;
-	vb[5] = (val >> 40) && 0xFF;
-	vb[6] = (val >> 48) && 0xFF;
-	vb[7] = (val >> 56) && 0xFF;
+	vb[1] = (val >> 8) & 0xFF;
+	vb[2] = (val >> 16) & 0xFF;
+	vb[3] = (val >> 24) & 0xFF;
+	vb[4] = (val >> 32) & 0xFF;
+	vb[5] = (val >> 40) & 0xFF;
+	vb[6] = (val >> 48) & 0xFF;
+	vb[7] = ((unsigned long long int)val >> 56) & 0xFF;
 
 	return packetbuf_push(buf, vb, sizeof(vb));
 }
 
-packetbuf *
+static packetbuf *
 push_length_int(packetbuf *buf, long long int val)
 {
 	if (val < 251) {
@@ -279,19 +326,19 @@ push_length_int(packetbuf *buf, long long int val)
 }
 
 
-packetbuf *
+static packetbuf *
 push_fixed_string(packetbuf *buf, int len, char *str)
 {
 	return packetbuf_push(buf, str, len);
 }
 
-packetbuf *
+static packetbuf *
 push_string(packetbuf *buf, char *str)
 {
 	return packetbuf_push(buf, str, strlen(str) + 1);
 }
 
-packetbuf *
+static packetbuf *
 push_length_string(packetbuf *buf, int len, char *str)
 {
 	push_length_int(buf, len);
@@ -305,7 +352,8 @@ shift_int1(packetbuf *buf)
 {
 	char ret;
 
-	packetbuf_shift(buf, &ret, 1);
+	if (packetbuf_shift(buf, &ret, 1) == NULL)
+		return 0;
 
 	return ret;
 }
@@ -313,9 +361,10 @@ shift_int1(packetbuf *buf)
 static short
 shift_int2(packetbuf *buf)
 {
-	char ret[2];
+	unsigned char ret[2];
 
-	packetbuf_shift(buf, ret, sizeof(ret));
+	if (packetbuf_shift(buf, ret, sizeof(ret)) == NULL)
+		return 0;
 
 	return ret[0] + (ret[1] << 8);
 }
@@ -323,9 +372,10 @@ shift_int2(packetbuf *buf)
 static int
 shift_int3(packetbuf *buf)
 {
-	char ret[3];
+	unsigned char ret[3];
 
-	packetbuf_shift(buf, ret, sizeof(ret));
+	if (packetbuf_shift(buf, ret, sizeof(ret)) == NULL)
+		return 0;
 
 	return ret[0] + (ret[1] << 8) + (ret[2] << 16);
 }
@@ -333,9 +383,10 @@ shift_int3(packetbuf *buf)
 static int
 shift_int4(packetbuf *buf)
 {
-	char ret[4];
+	unsigned char ret[4];
 
-	packetbuf_shift(buf, ret, sizeof(ret));
+	if (packetbuf_shift(buf, ret, sizeof(ret)) == NULL)
+		return 0;
 
 	return ret[0] + (ret[1] << 8) + (ret[2] << 16) + (ret[3] << 24);
 }
@@ -343,33 +394,35 @@ shift_int4(packetbuf *buf)
 static long long int
 shift_int6(packetbuf *buf)
 {
-	char ret[6];
+	unsigned char ret[6];
 
-	packetbuf_shift(buf, ret, sizeof(ret));
+	if (packetbuf_shift(buf, ret, sizeof(ret)) == NULL)
+		return 0;
 
 	return ret[0] +
 		(ret[1] << 8) +
 		(ret[2] << 16) +
 		(ret[3] << 24) +
-		(((long long int)ret[4]) << 32) +
-		(((long long int)ret[5]) << 40);
+		(((unsigned long long int)ret[4]) << 32) +
+		(((unsigned long long int)ret[5]) << 40);
 }
 
 static long long int
 shift_int8(packetbuf *buf)
 {
-	char ret[8];
+	unsigned char ret[8];
 
-	packetbuf_shift(buf, ret, sizeof(ret));
+	if (packetbuf_shift(buf, ret, sizeof(ret)) == NULL)
+		return 0;
 
 	return ret[0] +
 		(ret[1] << 8) +
 		(ret[2] << 16) +
 		(ret[3] << 24) +
-		(((long long int)ret[4]) << 32) +
-		(((long long int)ret[5]) << 40) +
-		(((long long int)ret[6]) << 48) +
-		(((long long int)ret[7]) << 56);
+		(((unsigned long long int)ret[4]) << 32) +
+		(((unsigned long long int)ret[5]) << 40) +
+		(((unsigned long long int)ret[6]) << 48) +
+		(((unsigned long long int)ret[7]) << 56);
 }
 
 static long long int
@@ -393,7 +446,10 @@ shift_fixed_string(packetbuf *buf, int len)
 {
 	char *ret = malloc(sizeof(char) * (len + 1));
 
-	packetbuf_shift(buf, ret, len);
+	if (packetbuf_shift(buf, ret, len) == NULL) {
+		free(ret);
+		return NULL;
+	}
 
 	ret[len] = '\0';  /* convenience */
 
@@ -404,7 +460,7 @@ static char *
 shift_string(packetbuf *buf)
 {
 	size_t len = 0;
-	char *p;
+	unsigned char *p;
 
 	/* a bit ugly, but we need to find the length of the NULL-terminated
 	 * string, sort of efficiently */
@@ -413,9 +469,12 @@ shift_string(packetbuf *buf)
 	len++;  /* '\0' */
 
 	p = malloc(sizeof(char) * len);
-	packetbuf_shift(buf, p, len);
+	if (packetbuf_shift(buf, p, len) == NULL) {
+		free(p);
+		return NULL;
+	}
 
-	return p;
+	return (char *)p;
 }
 
 static char *
@@ -429,33 +488,156 @@ shift_length_string(packetbuf *buf)
 
 
 void
-send_handshakev10(int fd)
+send_handshakev10(int fd, char seq)
 {
 	packetbuf *buf = packetbuf_new();
-	int flags;
+	int flags = CLIENT_BASIC_FLAGS;
 
 	push_int1(buf, 0x0a);  /* protocol version */
-	push_string(buf, "5.7-mysqlpq");  /* server version */
-	push_int4(buf, 0);  /* connection ID */
+	push_string(buf, "5.7-mysqlpq-" VERSION);  /* server version */
+	push_int4(buf, 1);  /* connection ID */
 	push_fixed_string(buf, 8, "12345678");  /* auth_plugin_data_part_1 */
 	push_int1(buf, 0);  /* filler */
-	flags = 0
-		| 0x00000001   /* CLIENT_LONG_PASSWORD */
-		| 0x00000200   /* CLIENT_PROTOCOL_41 */
-		| 0x00000400   /* CLIENT_INTERACTIVE */
-		| 0x00010000   /* CLIENT_MULTI_STATEMENTS */
-		| 0x00020000   /* CLIENT_MULTI_RESULTS */
-		| 0x00040000   /* CLIENT_PS_MULTI_RESULTS */
-		;
-	push_int2(buf, flags & 0xFFFF);  /* capability_flags_1 */
-	push_int1(buf, 0x08);  /* character_set */
+	push_int2(buf, flags);  /* capability_flags_1 */
+	push_int1(buf, 0x21);  /* character_set */
 	push_int2(buf, 0x0002);  /* status_flags: auto-commit */
-	push_int2(buf, (flags >> 16) && 0xFFFF);  /* capability_flags_2 */
-	push_int1(buf, 0);  /* filler */
+	push_int2(buf, flags >> 16);  /* capability_flags_2 */
+	push_int1(buf, 21);  /* length of auth-plugin-data */
 	push_int8(buf, 0); push_int2(buf, 0);  /* reserved 10x00 */
+	push_fixed_string(buf, 13, "123456789012");  /* auth-plugin-data-part-2 */
+	push_string(buf, "mysql_native_password");  /* auth-plugin-name */
 
-	if (packetbuf_send(buf, fd) == -1) {
+	if (packetbuf_send(buf, seq, fd) == -1) {
 		fprintf(stderr, "failed to send handshakev10: %s\n", strerror(errno));
+	}
+
+	packetbuf_free(buf);
+}
+
+int
+recv_handshakeresponsev41(packetbuf *buf)
+{
+	int capabilities = shift_int2(buf);
+
+	if ((capabilities & CLIENT_PROTOCOL_41) == 0) {
+		fprintf(stderr, "client not v41 :(\n");
+		/* FIXME: b0rk here */
+		return 0;
+	}
+
+	capabilities += (shift_int2(buf) >> 16);  /* 4 bytes in v41 */
+
+#ifdef DEBUG
+	printf("capabilities:");
+	if (capabilities & CLIENT_PROTOCOL_41)
+		printf(" CLIENT_PROTOCOL_41");
+	if (capabilities & CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA)
+		printf(" CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA");
+	if (capabilities & CLIENT_SECURE_CONNECTION)
+		printf(" CLIENT_SECURE_CONNECTION");
+	if (capabilities & CLIENT_CONNECT_WITH_DB)
+		printf(" CLIENT_CONNECT_WITH_DB");
+	if (capabilities & CLIENT_PLUGIN_AUTH)
+		printf(" CLIENT_PLUGIN_AUTH");
+	if (capabilities & CLIENT_CONNECT_ATTRS)
+		printf(" CLIENT_CONNECT_ATTRS");
+	printf("\n");
+#endif
+
+	int maxpktsize = shift_int4(buf);
+	char charset = shift_int1(buf);
+	char *filler = shift_fixed_string(buf, 23);
+	char *username = shift_string(buf);
+	char *authresponse;
+	char *database = NULL;
+	char *authpluginname = NULL;
+
+	if (capabilities & CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA) {
+		long long int authlen = shift_length_int(buf);
+		authresponse = shift_fixed_string(buf, authlen);
+	} else if (capabilities & CLIENT_SECURE_CONNECTION) {
+		char authlen = shift_int1(buf);
+		authresponse = shift_fixed_string(buf, authlen);
+	} else {
+		authresponse = shift_string(buf);
+	}
+	if (capabilities & CLIENT_CONNECT_WITH_DB) {
+		database = shift_string(buf);
+	}
+	if (capabilities & CLIENT_PLUGIN_AUTH) {
+		authpluginname = shift_string(buf);
+	}
+	if (capabilities & CLIENT_CONNECT_ATTRS) {
+		char *d;
+		shift_length_int(buf);  /* keyslen */
+		while (1) {
+			/* this is keys and values handled as one */
+			d = shift_length_string(buf);
+			if (d == NULL)
+				break;
+			free(d);
+		}
+	}
+
+	printf("request from %s, charset %d\n", username, charset);
+	free(filler);
+	free(username);
+	free(authresponse);
+	if (database != NULL)
+		free(database);
+	if (authpluginname != NULL)
+		free(authpluginname);
+
+	return capabilities;
+}
+
+void
+send_ok(int fd, char seq, int capabilities)
+{
+	packetbuf *buf = packetbuf_new();
+	char *info = "congratulations, you just logged in";
+
+	push_int1(buf, 0);  /* OK packet header */
+	push_length_int(buf, 0);  /* affected rows */
+	push_length_int(buf, 0);  /* last inserted id */
+	if (capabilities & CLIENT_PROTOCOL_41) {  /* must be */
+		push_int2(buf, 0x0002);  /* auto-commit */
+		push_int2(buf, 0);  /* warnings */
+	}
+	if (capabilities & 0x00800000) {  /* CLIENT_SESSION_TRACK */
+		push_length_string(buf, strlen(info), info);
+	} else {
+		push_fixed_string(buf, strlen(info), info);
+	}
+
+	if (packetbuf_send(buf, seq, fd) == -1) {
+		fprintf(stderr, "failed to send ok: %s\n", strerror(errno));
+	}
+
+	packetbuf_free(buf);
+}
+
+void
+send_err(int fd, char seq, int capabilities, char *sqlstate, char *msg)
+{
+	packetbuf *buf = packetbuf_new();
+	char *err = "go away!";
+
+	push_int1(buf, 0xFF);  /* ERR packet header */
+	push_int2(buf, 1);  /* error code */
+	if (capabilities & CLIENT_PROTOCOL_41) {  /* must be */
+		char sbuf[6];
+		int i;
+		memset(sbuf, '\0', 6);
+		sbuf[0] = '#';
+		for (i = 0; i < sizeof(sbuf) && *sqlstate != '\0'; sqlstate++, i++)
+			sbuf[i] = *sqlstate;
+		push_fixed_string(buf, 6, sbuf);
+	}
+	push_fixed_string(buf, strlen(err), err);
+
+	if (packetbuf_send(buf, seq, fd) == -1) {
+		fprintf(stderr, "failed to send err: %s\n", strerror(errno));
 	}
 
 	packetbuf_free(buf);

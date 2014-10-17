@@ -30,19 +30,29 @@
 
 #include "mysqlpq.h"
 #include "collector.h"
+#include "mysqlproto.h"
 
 enum conntype {
 	LISTENER,
 	CONNECTION
 };
 
+enum connstate {
+	INIT,
+	HANDSHAKEV10,
+	LOGINOK,
+	INPUT
+};
+
 typedef struct _connection {
 	int sock;
 	char takenby;   /* -2: being setup, -1: free, 0: not taken, >0: tid */
-	char buf[12];
-	size_t buflen;
+	packetbuf *pkt;
+	int capabilities;
+	char seq;
 	char needmore:1;
 	time_t wait;
+	enum connstate state;
 } connection;
 
 typedef struct _dispatcher {
@@ -79,7 +89,6 @@ dispatch_addlistener(int sock)
 	(void) fcntl(sock, F_SETFL, O_NONBLOCK);
 	newconn->sock = sock;
 	newconn->takenby = 0;
-	newconn->buflen = 0;
 	for (c = 0; c < sizeof(listeners) / sizeof(connection *); c++)
 		if (__sync_bool_compare_and_swap(&(listeners[c]), NULL, newconn))
 			break;
@@ -172,27 +181,23 @@ dispatch_addconnection(int sock)
 
 	(void) fcntl(sock, F_SETFL, O_NONBLOCK);
 	connections[c].sock = sock;
-	connections[c].buflen = 0;
+	connections[c].pkt = NULL;
+	connections[c].capabilities = 0;
+	connections[c].seq = 0;
 	connections[c].needmore = 0;
 	connections[c].wait = 0;
+	connections[c].state = INIT;
 	connections[c].takenby = 0;  /* now dispatchers will pick this one up */
 	acceptedconnections++;
 
 	return 0;
 }
 
-#define IDLE_DISCONNECT_TIME  (10 * 60)  /* 10 minutes */
-/**
- * Look at conn and see if works needs to be done.  If so, do it.
- */
-static int
-dispatch_connection(connection *conn, dispatcher *self)
+#if 0
+static inline int
+read_input(connection *conn)
 {
-	int len;
-	struct timeval start, stop;
-
-	gettimeofday(&start, NULL);
-	len = -2;
+	int len = -2;
 	/* try to read more data, if that succeeds, or we still have data
 	 * left in the buffer, try to process the buffer */
 	if (
@@ -207,8 +212,6 @@ dispatch_connection(connection *conn, dispatcher *self)
 
 		/* TODO: do something */
 	}
-	gettimeofday(&stop, NULL);
-	self->ticks += timediff(start, stop);
 	if (len == -1 && (errno == EINTR ||
 				errno == EAGAIN ||
 				errno == EWOULDBLOCK))
@@ -245,6 +248,76 @@ dispatch_connection(connection *conn, dispatcher *self)
 	conn->takenby = 0;
 
 	return 1;
+}
+#endif
+
+static void
+handle_packet(connection *conn)
+{
+	switch (conn->state) {
+		case HANDSHAKEV10:
+			conn->capabilities = recv_handshakeresponsev41(conn->pkt);
+			conn->state = LOGINOK;
+			break;
+		case INPUT:
+			send_err(conn->sock, conn->seq, conn->capabilities,
+					"PQ001", "No connected endpoints");
+			break;
+		default:
+			fprintf(stderr, "don't know how to handle packet\n");
+			break;
+	}
+
+	conn->seq = packetbuf_hdr_seq(conn->pkt) + 1;
+}
+
+#define IDLE_DISCONNECT_TIME  (10 * 60)  /* 10 minutes */
+/**
+ * Look at conn and see if works needs to be done.  If so, do it.
+ */
+static int
+dispatch_connection(connection *conn, dispatcher *self)
+{
+	int ret = 1;
+	struct timeval start, stop;
+
+	gettimeofday(&start, NULL);
+
+	switch (conn->state) {
+		case INIT:
+			send_handshakev10(conn->sock, conn->seq);
+			conn->state = HANDSHAKEV10;
+			break;
+		case LOGINOK:
+			send_ok(conn->sock, conn->seq, conn->capabilities);
+			conn->state = INPUT;
+			break;
+		default:
+			if (conn->pkt == NULL)
+				conn->pkt = packetbuf_recv_hdr(conn->sock);
+			if (conn->pkt == NULL) {
+				ret = 0;
+				break;
+			}
+			/* FIXME handle errors */
+			if (packetbuf_recv_data(conn->pkt, conn->sock) > 0) {
+				/* packet done, deal with it */
+				handle_packet(conn);
+				packetbuf_free(conn->pkt);
+				conn->pkt = NULL;
+			} else {
+				printf("got insufficient data\n");
+			}
+			break;
+	}
+
+	gettimeofday(&stop, NULL);
+	self->ticks += timediff(start, stop);
+
+	/* "release" this connection again */
+	conn->takenby = 0;
+
+	return ret;
 }
 
 /**
