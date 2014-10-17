@@ -41,7 +41,8 @@ enum connstate {
 	INIT,
 	HANDSHAKEV10,
 	LOGINOK,
-	INPUT
+	INPUT,
+	QUERY_ERR
 };
 
 typedef struct _connection {
@@ -53,6 +54,8 @@ typedef struct _connection {
 	char needmore:1;
 	time_t wait;
 	enum connstate state;
+	char *sqlstate;
+	char *errmsg;
 } connection;
 
 typedef struct _dispatcher {
@@ -260,8 +263,21 @@ handle_packet(connection *conn)
 			conn->state = LOGINOK;
 			break;
 		case INPUT:
-			send_err(conn->sock, conn->seq, conn->capabilities,
-					"PQ001", "No connected endpoints");
+			switch (conn->pkt->buf[0]) {
+				case COM_QUERY: {
+					char *q = recv_comquery(conn->pkt);
+					printf("q: %s\n", q);
+					if (q != NULL)
+						free(q);
+					conn->state = QUERY_ERR;
+					conn->sqlstate = "PQ002";
+					conn->errmsg = "No connected endpoints";
+				}	break;
+				default:
+					send_err(conn->sock, conn->seq, conn->capabilities,
+							"PQ001", "Unhandled command");
+					break;
+			}
 			break;
 		default:
 			fprintf(stderr, "don't know how to handle packet\n");
@@ -290,6 +306,11 @@ dispatch_connection(connection *conn, dispatcher *self)
 			break;
 		case LOGINOK:
 			send_ok(conn->sock, conn->seq, conn->capabilities);
+			conn->state = INPUT;
+			break;
+		case QUERY_ERR:
+			send_err(conn->sock, conn->seq, conn->capabilities,
+					conn->sqlstate, conn->errmsg);
 			conn->state = INPUT;
 			break;
 		default:

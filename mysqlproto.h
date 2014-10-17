@@ -107,6 +107,8 @@ char packetbuf_hdr_seq(packetbuf *buf);
 
 void send_handshakev10(int fd, char seq);
 int recv_handshakeresponsev41(packetbuf *buf);
+char *recv_comquery(packetbuf *buf);
+
 void send_ok(int fd, char seq, int capabilities);
 void send_err(int fd, char seq, int capabilities, char *code, char *msg);
 

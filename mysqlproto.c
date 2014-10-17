@@ -591,6 +591,13 @@ recv_handshakeresponsev41(packetbuf *buf)
 	return capabilities;
 }
 
+char *
+recv_comquery(packetbuf *buf)
+{
+	shift_int1(buf);
+	return shift_fixed_string(buf, packetbuf_hdr_len(buf) - 1);
+}
+
 void
 send_ok(int fd, char seq, int capabilities)
 {
@@ -621,20 +628,19 @@ void
 send_err(int fd, char seq, int capabilities, char *sqlstate, char *msg)
 {
 	packetbuf *buf = packetbuf_new();
-	char *err = "go away!";
 
 	push_int1(buf, 0xFF);  /* ERR packet header */
-	push_int2(buf, 1);  /* error code */
+	push_int2(buf, 1105);  /* error code: ER_UNKNOWN_ERROR */
 	if (capabilities & CLIENT_PROTOCOL_41) {  /* must be */
 		char sbuf[6];
 		int i;
 		memset(sbuf, '\0', 6);
 		sbuf[0] = '#';
-		for (i = 0; i < sizeof(sbuf) && *sqlstate != '\0'; sqlstate++, i++)
+		for (i = 1; i < sizeof(sbuf) && *sqlstate != '\0'; sqlstate++, i++)
 			sbuf[i] = *sqlstate;
 		push_fixed_string(buf, 6, sbuf);
 	}
-	push_fixed_string(buf, strlen(err), err);
+	push_fixed_string(buf, strlen(msg), msg);
 
 	if (packetbuf_send(buf, seq, fd) == -1) {
 		fprintf(stderr, "failed to send err: %s\n", strerror(errno));
