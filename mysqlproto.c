@@ -20,6 +20,7 @@
 #include <string.h>
 #include <errno.h>
 #include <sys/socket.h>
+#include <openssl/sha.h>
 
 #include "mysqlpq.h"
 #include "mysqlproto.h"
@@ -490,7 +491,7 @@ shift_length_string(packetbuf *buf)
 void
 send_handshakev10(int fd, char seq)
 {
-	packetbuf *buf = packetbuf_new();
+	packetbuf *buf = packetbuf_get();
 	int flags = CLIENT_BASIC_FLAGS;
 
 	push_int1(buf, 0x0a);  /* protocol version */
@@ -512,6 +513,76 @@ send_handshakev10(int fd, char seq)
 	}
 
 	packetbuf_free(buf);
+}
+
+int
+recv_handshakev10(packetbuf *buf)
+{
+	char *ver;
+	int id;
+	char *auth1;
+	char *auth2 = NULL;
+	char authlen;
+	int capabilities;
+	char charset;
+	short status;
+	char *plugin = NULL;
+
+	if (shift_int1(buf) != 0x0a)
+		return 0;
+	ver = shift_string(buf);
+	id = shift_int4(buf);
+	printf("connected to mysql %s, connection id: %d\n", ver, id);
+	auth1 = shift_fixed_string(buf, 8);
+	shift_int1(buf);
+	capabilities = shift_int2(buf);
+	charset = shift_int1(buf);
+	status = shift_int2(buf);
+	capabilities |= ((int)shift_int2(buf)) << 16;
+	authlen = shift_int1(buf);
+	shift_int8(buf); shift_int2(buf);
+	if (capabilities & CLIENT_SECURE_CONNECTION) {
+		auth2 = shift_fixed_string(buf, authlen > 8 ? authlen - 8 : 0);
+	}
+	if (capabilities & CLIENT_PLUGIN_AUTH) {
+		plugin = shift_string(buf);
+	}
+
+	return capabilities;
+}
+
+void
+send_handshakeresponsev41(int fd, char seq, char *chal, int challen, char *user, char *passwd)
+{
+	packetbuf *buf = packetbuf_get();
+	SHA_CTX c;
+	unsigned char digest[SHA_DIGEST_LENGTH];
+	int capabilities = CLIENT_BASIC_FLAGS & ~CLIENT_CONNECT_WITH_DB;
+	char *dbname = NULL;
+
+	/* calculate sha1(<chal>sha1(sha1(passwd))) */
+	SHA1_Init(&c);
+	SHA1_Update(&c, passwd, strlen(passwd));
+	SHA1_Final(digest, &c);
+	SHA1_Init(&c);
+	SHA1_Update(&c, digest, sizeof(digest));
+	SHA1_Final(digest, &c);
+	SHA1_Init(&c);
+	SHA1_Update(&c, chal, challen);
+	SHA1_Update(&c, digest, sizeof(digest));
+	SHA1_Final(digest, &c);
+
+	push_int4(buf, capabilities);
+	push_int4(buf, 0xFEFFFFFF);
+	push_int1(buf, 0x33);
+	push_int8(buf, 0); push_int8(buf, 0); push_int6(buf, 0); push_int1(buf, 0);
+	push_string(buf, user);
+	push_length_int(buf, sizeof(digest));
+	push_fixed_string(buf, sizeof(digest), (char *)digest);
+	if (capabilities & CLIENT_CONNECT_WITH_DB) {
+		push_string(buf, dbname);
+	}
+	push_string(buf, "mysql_native_password");
 }
 
 int
@@ -601,7 +672,7 @@ recv_comquery(packetbuf *buf)
 void
 send_ok(int fd, char seq, int capabilities)
 {
-	packetbuf *buf = packetbuf_new();
+	packetbuf *buf = packetbuf_get();
 	char *info = "congratulations, you just logged in";
 
 	push_int1(buf, 0);  /* OK packet header */
@@ -627,7 +698,7 @@ send_ok(int fd, char seq, int capabilities)
 void
 send_err(int fd, char seq, int capabilities, char *sqlstate, char *msg)
 {
-	packetbuf *buf = packetbuf_new();
+	packetbuf *buf = packetbuf_get();
 
 	push_int1(buf, 0xFF);  /* ERR packet header */
 	push_int2(buf, 1105);  /* error code: ER_UNKNOWN_ERROR */
