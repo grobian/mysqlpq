@@ -50,6 +50,7 @@ typedef struct _connection {
 	int sock;
 	char takenby;   /* -2: being setup, -1: free, 0: not taken, >0: tid */
 	packetbuf *pkt;
+	connprops props;
 	int capabilities;
 	char seq;
 	char needmore:1;
@@ -186,6 +187,7 @@ dispatch_addconnection(int sock)
 	(void) fcntl(sock, F_SETFL, O_NONBLOCK);
 	connections[c].sock = sock;
 	connections[c].pkt = NULL;
+	memset(&connections[c].props, 0, sizeof(connprops));
 	connections[c].capabilities = 0;
 	connections[c].seq = 0;
 	connections[c].needmore = 0;
@@ -260,7 +262,8 @@ handle_packet(connection *conn)
 {
 	switch (conn->state) {
 		case HANDSHAKEV10:
-			conn->capabilities = recv_handshakeresponsev41(conn->pkt);
+			conn->capabilities = recv_handshakeresponsev41(conn->pkt,
+					&conn->props);
 			conn->state = LOGINOK;
 			break;
 		case INPUT:
@@ -304,7 +307,14 @@ dispatch_connection(connection *conn, dispatcher *self)
 
 	switch (conn->state) {
 		case INIT:
-			send_handshakev10(conn->sock, conn->seq);
+			conn->props.sver = strdup("5.7-mysqlpq-" VERSION);
+			conn->props.status = 0x0002;  /* auto_commit */
+			conn->props.connid = (int)acceptedconnections;
+			conn->props.charset = 0x21;  /* UTF-8 */
+			conn->props.chal = strdup("12345678123456789012");
+			conn->props.auth = strdup("mysql_native_password");
+			conn->props.capabilities = CLIENT_BASIC_FLAGS;
+			send_handshakev10(conn->sock, conn->seq, &conn->props);
 			conn->state = HANDSHAKEV10;
 			break;
 		case LOGINOK:

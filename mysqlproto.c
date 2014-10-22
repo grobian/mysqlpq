@@ -489,24 +489,23 @@ shift_length_string(packetbuf *buf)
 
 
 void
-send_handshakev10(int fd, char seq)
+send_handshakev10(int fd, char seq, connprops *props)
 {
 	packetbuf *buf = packetbuf_get();
-	int flags = CLIENT_BASIC_FLAGS;
 
 	push_int1(buf, 0x0a);  /* protocol version */
-	push_string(buf, "5.7-mysqlpq-" VERSION);  /* server version */
-	push_int4(buf, 1);  /* connection ID */
-	push_fixed_string(buf, 8, "12345678");  /* auth_plugin_data_part_1 */
+	push_string(buf, props->sver);  /* server version */
+	push_int4(buf, props->connid);  /* connection ID */
+	push_fixed_string(buf, 8, props->chal);  /* auth_plugin_data_part_1 */
 	push_int1(buf, 0);  /* filler */
-	push_int2(buf, flags);  /* capability_flags_1 */
-	push_int1(buf, 0x21);  /* character_set */
-	push_int2(buf, 0x0002);  /* status_flags: auto-commit */
-	push_int2(buf, flags >> 16);  /* capability_flags_2 */
-	push_int1(buf, 21);  /* length of auth-plugin-data */
+	push_int2(buf, props->capabilities);  /* capability_flags_1 */
+	push_int1(buf, props->charset);  /* character_set */
+	push_int2(buf, props->status);  /* status_flags: auto-commit */
+	push_int2(buf, props->capabilities >> 16);  /* capability_flags_2 */
+	push_int1(buf, strlen(props->chal) + 1);  /* length of auth-plugin-data */
 	push_int8(buf, 0); push_int2(buf, 0);  /* reserved 10x00 */
-	push_fixed_string(buf, 13, "123456789012");  /* auth-plugin-data-part-2 */
-	push_string(buf, "mysql_native_password");  /* auth-plugin-name */
+	push_string(buf, &props->chal[8]);  /* auth-plugin-data-part-2 */
+	push_string(buf, props->auth);  /* auth-plugin-name */
 
 	if (packetbuf_send(buf, seq, fd) == -1) {
 		fprintf(stderr, "failed to send handshakev10: %s\n", strerror(errno));
@@ -515,78 +514,82 @@ send_handshakev10(int fd, char seq)
 	packetbuf_free(buf);
 }
 
-int
+connprops *
 recv_handshakev10(packetbuf *buf)
 {
-	char *ver;
-	int id;
+	connprops *conn = malloc(sizeof(connprops));
 	char *auth1;
 	char *auth2 = NULL;
 	char authlen;
-	int capabilities;
-	char charset;
-	short status;
-	char *plugin = NULL;
 
 	if (shift_int1(buf) != 0x0a)
 		return 0;
-	ver = shift_string(buf);
-	id = shift_int4(buf);
-	printf("connected to mysql %s, connection id: %d\n", ver, id);
+	conn->sver = shift_string(buf);
+	conn->connid = shift_int4(buf);
 	auth1 = shift_fixed_string(buf, 8);
 	shift_int1(buf);
-	capabilities = shift_int2(buf);
-	charset = shift_int1(buf);
-	status = shift_int2(buf);
-	capabilities |= ((int)shift_int2(buf)) << 16;
+	conn->capabilities = shift_int2(buf);
+	conn->charset = shift_int1(buf);
+	conn->status = shift_int2(buf);
+	conn->capabilities |= ((int)shift_int2(buf)) << 16;
 	authlen = shift_int1(buf);
 	shift_int8(buf); shift_int2(buf);
-	if (capabilities & CLIENT_SECURE_CONNECTION) {
+	if (conn->capabilities & CLIENT_SECURE_CONNECTION) {
 		auth2 = shift_fixed_string(buf, authlen > 8 ? authlen - 8 : 0);
 	}
-	if (capabilities & CLIENT_PLUGIN_AUTH) {
-		plugin = shift_string(buf);
+	if (conn->capabilities & CLIENT_PLUGIN_AUTH) {
+		conn->auth = shift_string(buf);
+	}
+	if (auth2 != NULL) {
+		conn->chal = malloc(sizeof(char) * authlen);
+		snprintf(conn->chal, authlen, "%s%s", auth1, auth2);
+		free(auth1);
+		free(auth2);
+	} else {
+		conn->chal = auth1;
 	}
 
-	return capabilities;
+	return conn;
 }
 
 void
-send_handshakeresponsev41(int fd, char seq, char *chal, int challen, char *user, char *passwd)
+send_handshakeresponsev41(int fd, char seq, connprops *props)
 {
 	packetbuf *buf = packetbuf_get();
 	SHA_CTX c;
 	unsigned char digest[SHA_DIGEST_LENGTH];
-	int capabilities = CLIENT_BASIC_FLAGS & ~CLIENT_CONNECT_WITH_DB;
-	char *dbname = NULL;
+	int capabilities = props->capabilities;
+	
+	if (props->dbname != NULL)
+		capabilities &= ~CLIENT_CONNECT_WITH_DB;
 
 	/* calculate sha1(<chal>sha1(sha1(passwd))) */
 	SHA1_Init(&c);
-	SHA1_Update(&c, passwd, strlen(passwd));
+	SHA1_Update(&c, props->passwd, strlen(props->passwd));
 	SHA1_Final(digest, &c);
 	SHA1_Init(&c);
 	SHA1_Update(&c, digest, sizeof(digest));
 	SHA1_Final(digest, &c);
 	SHA1_Init(&c);
-	SHA1_Update(&c, chal, challen);
+	SHA1_Update(&c, props->chal, strlen(props->chal));
 	SHA1_Update(&c, digest, sizeof(digest));
 	SHA1_Final(digest, &c);
 
-	push_int4(buf, capabilities);
-	push_int4(buf, 0xFEFFFFFF);
-	push_int1(buf, 0x33);
+	push_int4(buf, props->capabilities);
+	push_int4(buf, props->maxpktsize);
+	push_int1(buf, props->charset);
 	push_int8(buf, 0); push_int8(buf, 0); push_int6(buf, 0); push_int1(buf, 0);
-	push_string(buf, user);
+	push_string(buf, props->username);
 	push_length_int(buf, sizeof(digest));
 	push_fixed_string(buf, sizeof(digest), (char *)digest);
 	if (capabilities & CLIENT_CONNECT_WITH_DB) {
-		push_string(buf, dbname);
+		push_string(buf, props->dbname);
 	}
-	push_string(buf, "mysql_native_password");
+	push_string(buf, props->auth);
 }
 
 int
-recv_handshakeresponsev41(packetbuf *buf)
+recv_handshakeresponsev41(packetbuf *buf, connprops *props)
 {
 	int capabilities = shift_int2(buf);
 
@@ -596,7 +599,8 @@ recv_handshakeresponsev41(packetbuf *buf)
 		return 0;
 	}
 
-	capabilities += (shift_int2(buf) >> 16);  /* 4 bytes in v41 */
+	props->capabilities =
+		capabilities += (shift_int2(buf) >> 16);  /* 4 bytes in v41 */
 
 #ifdef DEBUG
 	printf("capabilities:");
@@ -615,51 +619,40 @@ recv_handshakeresponsev41(packetbuf *buf)
 	printf("\n");
 #endif
 
-	int maxpktsize = shift_int4(buf);
-	char charset = shift_int1(buf);
-	char *filler = shift_fixed_string(buf, 23);
-	char *username = shift_string(buf);
-	char *authresponse;
-	char *database = NULL;
-	char *authpluginname = NULL;
+	props->maxpktsize = shift_int4(buf);
+	props->charset = shift_int1(buf);
+	shift_int8(buf); shift_int8(buf); shift_int6(buf); shift_int1(buf);
+	if (props->username != NULL)
+		free(props->username);
+	props->username = shift_string(buf);
 
+	if (props->chalresponse != NULL)
+		free(props->chalresponse);
 	if (capabilities & CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA) {
 		long long int authlen = shift_length_int(buf);
-		authresponse = shift_fixed_string(buf, authlen);
+		props->chalresponse = shift_fixed_string(buf, authlen);
 	} else if (capabilities & CLIENT_SECURE_CONNECTION) {
 		char authlen = shift_int1(buf);
-		authresponse = shift_fixed_string(buf, authlen);
+		props->chalresponse = shift_fixed_string(buf, authlen);
 	} else {
-		authresponse = shift_string(buf);
+		props->chalresponse = shift_string(buf);
 	}
 	if (capabilities & CLIENT_CONNECT_WITH_DB) {
-		database = shift_string(buf);
+		if (props->dbname != NULL)
+			free(props->dbname);
+		props->dbname = shift_string(buf);
 	}
 	if (capabilities & CLIENT_PLUGIN_AUTH) {
-		authpluginname = shift_string(buf);
+		if (props->auth != NULL)
+			free(props->auth);
+		props->auth = shift_string(buf);
 	}
 	if (capabilities & CLIENT_CONNECT_ATTRS) {
-		char *d;
-		shift_length_int(buf);  /* keyslen */
-		while (1) {
-			/* this is keys and values handled as one */
-			d = shift_length_string(buf);
-			if (d == NULL)
-				break;
-			free(d);
-		}
+		long long int len = shift_length_int(buf);  /* keyslen */
+		props->attrs = shift_fixed_string(buf, len);
 	}
 
-	printf("request from %s, charset %d\n", username, charset);
-	free(filler);
-	free(username);
-	free(authresponse);
-	if (database != NULL)
-		free(database);
-	if (authpluginname != NULL)
-		free(authpluginname);
-
-	return capabilities;
+	return 1;
 }
 
 char *

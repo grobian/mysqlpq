@@ -97,6 +97,22 @@ typedef struct {
 	size_t len;
 } packetbuf;
 
+typedef struct {
+	int capabilities;
+	char *sver;
+	int connid;
+	char *chal;
+	char *auth;
+	char charset;
+	short status;
+	int maxpktsize;
+	char *username;
+	char *passwd;
+	char *chalresponse;
+	char *dbname;
+	char *attrs;
+} connprops;
+
 packetbuf *packetbuf_recv_hdr(int fd);
 int packetbuf_recv_data(packetbuf *buf, int fd);
 int packetbuf_send(packetbuf *buf, char seq, int fd);
@@ -105,8 +121,8 @@ void packetbuf_free(packetbuf *buf);
 int packetbuf_hdr_len(packetbuf *buf);
 char packetbuf_hdr_seq(packetbuf *buf);
 
-void send_handshakev10(int fd, char seq);
-int recv_handshakeresponsev41(packetbuf *buf);
+void send_handshakev10(int fd, char seq, connprops *props);
+int recv_handshakeresponsev41(packetbuf *buf, connprops *props);
 char *recv_comquery(packetbuf *buf);
 
 void send_ok(int fd, char seq, int capabilities);
