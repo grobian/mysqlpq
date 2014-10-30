@@ -24,6 +24,9 @@
 #define COM_CONNECT  0x0b
 #define COM_PING     0x0e
 
+#define MYSQL_OK     0x00
+#define MYSQL_ERR    0xff
+
 #define CLIENT_LONG_PASSWORD    1   /* new more secure passwords */
 #define CLIENT_FOUND_ROWS   2   /* Found instead of affected rows */
 #define CLIENT_LONG_FLAG    4   /* Get all column flags */
@@ -122,10 +125,13 @@ int packetbuf_hdr_len(packetbuf *buf);
 char packetbuf_hdr_seq(packetbuf *buf);
 
 void send_handshakev10(int fd, char seq, connprops *props);
+connprops *recv_handshakev10(packetbuf *buf, connprops *props);
 int recv_handshakeresponsev41(packetbuf *buf, connprops *props);
+void send_handshakeresponsev41(int fd, char seq, connprops *props);
 char *recv_comquery(packetbuf *buf);
 
 void send_ok(int fd, char seq, int capabilities);
 void send_err(int fd, char seq, int capabilities, char *code, char *msg);
+char *recv_err(packetbuf *buf, int capabilities);
 
 #endif

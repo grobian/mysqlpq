@@ -38,11 +38,17 @@ enum conntype {
 };
 
 enum connstate {
-	INIT,
-	HANDSHAKEV10,
+	SENDHANDSHAKEV10,
+	RECVHANDSHAKEV10,
+	RECVHANDSHAKERESPV10,
+	SENDHANDSHAKERESPV10,
 	LOGINOK,
+	AFTERLOGIN,
 	INPUT,
+	READY,
+	QUERY,
 	QUERY_ERR,
+	FAIL,
 	QUIT
 };
 
@@ -51,11 +57,11 @@ typedef struct _connection {
 	char takenby;   /* -2: being setup, -1: free, 0: not taken, >0: tid */
 	packetbuf *pkt;
 	connprops props;
-	int capabilities;
 	char seq;
 	char needmore:1;
 	time_t wait;
 	enum connstate state;
+	char *query;
 	char *sqlstate;
 	char *errmsg;
 } connection;
@@ -140,8 +146,8 @@ dispatch_removelistener(int sock)
  * Adds a connection socket to the chain of connections.
  * Connection sockets are those which need to be read from.
  */
-int
-dispatch_addconnection(int sock)
+static int
+dispatch_addconnection(int sock, enum connstate istate)
 {
 	size_t c;
 
@@ -159,7 +165,7 @@ dispatch_addconnection(int sock)
 		if (connectionslen > c) {
 			/* another dispatcher just extended the list */
 			pthread_rwlock_unlock(&connectionslock);
-			return dispatch_addconnection(sock);
+			return dispatch_addconnection(sock, istate);
 		}
 		newlst = realloc(connections,
 				sizeof(connection) * (connectionslen + CONNGROWSZ));
@@ -188,11 +194,10 @@ dispatch_addconnection(int sock)
 	connections[c].sock = sock;
 	connections[c].pkt = NULL;
 	memset(&connections[c].props, 0, sizeof(connprops));
-	connections[c].capabilities = 0;
 	connections[c].seq = 0;
 	connections[c].needmore = 0;
 	connections[c].wait = 0;
-	connections[c].state = INIT;
+	connections[c].state = istate;
 	connections[c].takenby = 0;  /* now dispatchers will pick this one up */
 	acceptedconnections++;
 
@@ -261,10 +266,34 @@ static void
 handle_packet(connection *conn)
 {
 	switch (conn->state) {
-		case HANDSHAKEV10:
-			conn->capabilities = recv_handshakeresponsev41(conn->pkt,
-					&conn->props);
+		case RECVHANDSHAKEV10:
+			if (recv_handshakev10(conn->pkt, &conn->props) == NULL) {
+				fprintf(stderr, "failed to parse package from server\n");
+			} else {
+				conn->state = SENDHANDSHAKERESPV10;
+			}
+			break;
+		case RECVHANDSHAKERESPV10:
+			recv_handshakeresponsev41(conn->pkt, &conn->props);
 			conn->state = LOGINOK;
+			break;
+		case AFTERLOGIN:
+			switch (conn->pkt->buf[0]) {
+				case MYSQL_OK:
+					conn->state = READY;
+					break;
+				case MYSQL_ERR: {
+					char *err;
+					conn->state = FAIL;
+					err = recv_err(conn->pkt, conn->props.capabilities);
+					fprintf(stderr, "failed to login: %s\n", err);
+					free(err);
+				}	break;
+				default:
+					fprintf(stderr, "unhandled response after login\n");
+					conn->state = FAIL;
+					break;
+			}
 			break;
 		case INPUT:
 			switch (conn->pkt->buf[0]) {
@@ -272,15 +301,13 @@ handle_packet(connection *conn)
 					conn->state = QUIT;
 					break;
 				case COM_QUERY: {
-					char *q = recv_comquery(conn->pkt);
-					if (q != NULL)
-						free(q);
-					conn->state = QUERY_ERR;
-					conn->sqlstate = "PQ002";
-					conn->errmsg = "No connected endpoints";
+					if (conn->query != NULL)
+						free(conn->query);
+					conn->query = recv_comquery(conn->pkt);
+					conn->state = QUERY;
 				}	break;
 				default:
-					send_err(conn->sock, conn->seq, conn->capabilities,
+					send_err(conn->sock, conn->seq, conn->props.capabilities,
 							"PQ001", "Unhandled command");
 					break;
 			}
@@ -306,7 +333,7 @@ dispatch_connection(connection *conn, dispatcher *self)
 	gettimeofday(&start, NULL);
 
 	switch (conn->state) {
-		case INIT:
+		case SENDHANDSHAKEV10:
 			conn->props.sver = strdup("5.7-mysqlpq-" VERSION);
 			conn->props.status = 0x0002;  /* auto_commit */
 			conn->props.connid = (int)acceptedconnections;
@@ -315,14 +342,24 @@ dispatch_connection(connection *conn, dispatcher *self)
 			conn->props.auth = strdup("mysql_native_password");
 			conn->props.capabilities = CLIENT_BASIC_FLAGS;
 			send_handshakev10(conn->sock, conn->seq, &conn->props);
-			conn->state = HANDSHAKEV10;
+			conn->state = RECVHANDSHAKERESPV10;
+			break;
+		case SENDHANDSHAKERESPV10:
+			send_handshakeresponsev41(conn->sock, conn->seq, &conn->props);
+			conn->state = AFTERLOGIN;
 			break;
 		case LOGINOK:
-			send_ok(conn->sock, conn->seq, conn->capabilities);
+			send_ok(conn->sock, conn->seq, conn->props.capabilities);
 			conn->state = INPUT;
 			break;
+		case QUERY:
+			/* assume all endpoints are connected */
+			conn->state = QUERY_ERR;
+			conn->sqlstate = "PQ002";
+			conn->errmsg = "No connected endpoints";
+			//break;
 		case QUERY_ERR:
-			send_err(conn->sock, conn->seq, conn->capabilities,
+			send_err(conn->sock, conn->seq, conn->props.capabilities,
 					conn->sqlstate, conn->errmsg);
 			conn->state = INPUT;
 			break;
@@ -415,7 +452,7 @@ dispatch_runner(void *arg)
 									fmtnow(nowbuf), strerror(errno));
 							continue;
 						}
-						if (dispatch_addconnection(client) != 0) {
+						if (dispatch_addconnection(client, SENDHANDSHAKEV10) != 0) {
 							close(client);
 							continue;
 						}

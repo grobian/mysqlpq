@@ -46,6 +46,7 @@ packetbuf_new(void)
 	return ret;
 }
 
+#if 0
 static packetbuf *
 packetbuf_reset(packetbuf *buf)
 {
@@ -54,6 +55,7 @@ packetbuf_reset(packetbuf *buf)
 
 	return buf;
 }
+#endif
 
 static inline packetbuf *
 packetbuf_realloc(packetbuf *buf, size_t len)
@@ -478,6 +480,7 @@ shift_string(packetbuf *buf)
 	return (char *)p;
 }
 
+#if 0
 static char *
 shift_length_string(packetbuf *buf)
 {
@@ -486,6 +489,7 @@ shift_length_string(packetbuf *buf)
 	len = shift_length_int(buf);
 	return shift_fixed_string(buf, (int)len);
 }
+#endif
 
 
 void
@@ -515,15 +519,14 @@ send_handshakev10(int fd, char seq, connprops *props)
 }
 
 connprops *
-recv_handshakev10(packetbuf *buf)
+recv_handshakev10(packetbuf *buf, connprops *conn)
 {
-	connprops *conn = malloc(sizeof(connprops));
 	char *auth1;
 	char *auth2 = NULL;
 	char authlen;
 
 	if (shift_int1(buf) != 0x0a)
-		return 0;
+		return NULL;
 	conn->sver = shift_string(buf);
 	conn->connid = shift_int4(buf);
 	auth1 = shift_fixed_string(buf, 8);
@@ -668,7 +671,7 @@ send_ok(int fd, char seq, int capabilities)
 	packetbuf *buf = packetbuf_get();
 	char *info = "congratulations, you just logged in";
 
-	push_int1(buf, 0);  /* OK packet header */
+	push_int1(buf, MYSQL_OK);  /* OK packet header */
 	push_length_int(buf, 0);  /* affected rows */
 	push_length_int(buf, 0);  /* last inserted id */
 	if (capabilities & CLIENT_PROTOCOL_41) {  /* must be */
@@ -693,7 +696,7 @@ send_err(int fd, char seq, int capabilities, char *sqlstate, char *msg)
 {
 	packetbuf *buf = packetbuf_get();
 
-	push_int1(buf, 0xFF);  /* ERR packet header */
+	push_int1(buf, MYSQL_ERR);  /* ERR packet header */
 	push_int2(buf, 1105);  /* error code: ER_UNKNOWN_ERROR */
 	if (capabilities & CLIENT_PROTOCOL_41) {  /* must be */
 		char sbuf[6];
@@ -711,4 +714,24 @@ send_err(int fd, char seq, int capabilities, char *sqlstate, char *msg)
 	}
 
 	packetbuf_free(buf);
+}
+
+char *
+recv_err(packetbuf *buf, int capabilities)
+{
+	short errcode;
+	char *errmsg;
+
+	shift_int1(buf);  /* MYSQL_ERR */
+	errcode = shift_int2(buf);
+	if (capabilities & CLIENT_PROTOCOL_41) {  /* must be */
+		errmsg = shift_fixed_string(buf, buf->len - 3);
+		/* shift the sqlstate to make it human consumable */
+		memmove(errmsg, errmsg + 1, 5);
+		errmsg[5] = ':';
+	} else {
+		errmsg = shift_fixed_string(buf, buf->len - 3);
+	}
+
+	return errmsg;
 }
