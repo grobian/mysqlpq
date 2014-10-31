@@ -27,6 +27,7 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/resource.h>
+#include <arpa/inet.h>
 
 #include "mysqlpq.h"
 #include "collector.h"
@@ -270,6 +271,7 @@ handle_packet(connection *conn)
 			if (recv_handshakev10(conn->pkt, &conn->props) == NULL) {
 				fprintf(stderr, "failed to parse package from server\n");
 			} else {
+				printf("got handshake\n");
 				conn->state = SENDHANDSHAKERESPV10;
 			}
 			break;
@@ -343,8 +345,40 @@ dispatch_connection(connection *conn, dispatcher *self)
 			conn->props.capabilities = CLIENT_BASIC_FLAGS;
 			send_handshakev10(conn->sock, conn->seq, &conn->props);
 			conn->state = RECVHANDSHAKERESPV10;
+			/* fork off connections to backends */
+			/* FIXME: this needs to be done asynchronously */
+			{
+				int fd;
+				struct sockaddr_in serv_addr;
+				char nowbuf[24];
+
+				if ((fd = socket(PF_INET, SOCK_STREAM, 0)) < 0) {
+					fprintf(stderr, "[%s] failed to create socket: %s\n",
+							fmtnow(nowbuf), strerror(errno));
+					break;
+				}
+
+				serv_addr.sin_family = PF_INET;
+				serv_addr.sin_port = htons(3306);
+				inet_pton(PF_INET, "localhost", &serv_addr.sin_addr);
+
+				if (connect(fd,
+							(struct sockaddr *)&serv_addr, sizeof(serv_addr)))
+				{
+					fprintf(stderr, "[%s] failed to connect socket: %s\n",
+							fmtnow(nowbuf), strerror(errno));
+					break;
+				}
+				printf("connecting to mysql\n");
+				dispatch_addconnection(fd, RECVHANDSHAKEV10);
+			}
 			break;
 		case SENDHANDSHAKERESPV10:
+			conn->props.capabilities = CLIENT_BASIC_FLAGS;
+			conn->props.username = strdup("test");
+			conn->props.passwd = strdup("test");
+			conn->props.auth = strdup("mysql_native_password");
+			conn->props.dbname = NULL;
 			send_handshakeresponsev41(conn->sock, conn->seq, &conn->props);
 			conn->state = AFTERLOGIN;
 			break;
@@ -374,6 +408,8 @@ dispatch_connection(connection *conn, dispatcher *self)
 			gettimeofday(&stop, NULL);
 			self->ticks += timediff(start, stop);
 			return 0;
+		case READY:
+			break;
 		default:
 			if (conn->pkt == NULL)
 				conn->pkt = packetbuf_recv_hdr(conn->sock);

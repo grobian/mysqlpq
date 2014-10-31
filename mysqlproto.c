@@ -563,7 +563,7 @@ send_handshakeresponsev41(int fd, char seq, connprops *props)
 	unsigned char digest[SHA_DIGEST_LENGTH];
 	int capabilities = props->capabilities;
 	
-	if (props->dbname != NULL)
+	if (props->dbname == NULL)
 		capabilities &= ~CLIENT_CONNECT_WITH_DB;
 
 	/* calculate sha1(<chal>sha1(sha1(passwd))) */
@@ -588,7 +588,26 @@ send_handshakeresponsev41(int fd, char seq, connprops *props)
 	if (capabilities & CLIENT_CONNECT_WITH_DB) {
 		push_string(buf, props->dbname);
 	}
-	push_string(buf, props->auth);
+	if (capabilities & CLIENT_PLUGIN_AUTH) {
+		push_string(buf, props->auth);
+	}
+	if (capabilities & CLIENT_CONNECT_ATTRS) {
+		push_length_int(buf,
+				1 + strlen("_client_name") +
+				1 + strlen("mysqlpq") +
+				1 + strlen("_client_version") +
+				1 + strlen(VERSION));
+		push_length_string(buf, strlen("_client_name"), "_client_name");
+		push_length_string(buf, strlen("mysqlpq"), "mysqlpq");
+		push_length_string(buf, strlen("_client_version"), "_client_version");
+		push_length_string(buf, strlen(VERSION), VERSION);
+	}
+
+	if (packetbuf_send(buf, seq, fd) == -1) {
+		fprintf(stderr, "failed to send handshakeresponsev41: %s\n", strerror(errno));
+	}
+
+	packetbuf_free(buf);
 }
 
 int
