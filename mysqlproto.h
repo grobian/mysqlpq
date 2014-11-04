@@ -27,37 +27,37 @@
 #define MYSQL_OK     0x00
 #define MYSQL_ERR    0xff
 
-#define CLIENT_LONG_PASSWORD    1   /* new more secure passwords */
-#define CLIENT_FOUND_ROWS   2   /* Found instead of affected rows */
-#define CLIENT_LONG_FLAG    4   /* Get all column flags */
-#define CLIENT_CONNECT_WITH_DB  8   /* One can specify db on connect */
-#define CLIENT_NO_SCHEMA    16  /* Don't allow database.table.column */
-#define CLIENT_COMPRESS     32  /* Can use compression protocol */
-#define CLIENT_ODBC     64  /* Odbc client */
-#define CLIENT_LOCAL_FILES  128 /* Can use LOAD DATA LOCAL */
-#define CLIENT_IGNORE_SPACE 256 /* Ignore spaces before '(' */
-#define CLIENT_PROTOCOL_41  512 /* New 4.1 protocol */
-#define CLIENT_INTERACTIVE  1024    /* This is an interactive client */
-#define CLIENT_SSL              2048    /* Switch to SSL after handshake */
-#define CLIENT_IGNORE_SIGPIPE   4096    /* IGNORE sigpipes */
-#define CLIENT_TRANSACTIONS 8192    /* Client knows about transactions */
-#define CLIENT_RESERVED         16384   /* Old flag for 4.1 protocol  */
-#define CLIENT_SECURE_CONNECTION 32768  /* New 4.1 authentication */
-#define CLIENT_MULTI_STATEMENTS (1UL << 16) /* Enable/disable multi-stmt support */
-#define CLIENT_MULTI_RESULTS    (1UL << 17) /* Enable/disable multi-results */
-#define CLIENT_PS_MULTI_RESULTS (1UL << 18) /* Multi-results in PS-protocol */
+#define CLIENT_LONG_PASSWORD         1 /* 0x01 new more secure passwords */
+#define CLIENT_FOUND_ROWS            2 /* 0x02 Found instead of affected rows */
+#define CLIENT_LONG_FLAG             4 /* 0x04 Get all column flags */
+#define CLIENT_CONNECT_WITH_DB       8 /* 0x08 One can specify db on connect */
+#define CLIENT_NO_SCHEMA            16 /* 0x10 Don't allow database.table.column */
+#define CLIENT_COMPRESS             32 /* 0x20 Can use compression protocol */
+#define CLIENT_ODBC                 64 /* 0x40 Odbc client */
+#define CLIENT_LOCAL_FILES         128 /* 0x80 Can use LOAD DATA LOCAL */
+#define CLIENT_IGNORE_SPACE        256 /* 0x0100 Ignore spaces before '(' */
+#define CLIENT_PROTOCOL_41         512 /* 0x0200 New 4.1 protocol */
+#define CLIENT_INTERACTIVE        1024 /* 0x0400 This is an interactive client */
+#define CLIENT_SSL                2048 /* 0x0800 Switch to SSL after handshake */
+#define CLIENT_IGNORE_SIGPIPE     4096 /* 0x1000 IGNORE sigpipes */
+#define CLIENT_TRANSACTIONS       8192 /* 0x2000 Client knows about transactions */
+#define CLIENT_RESERVED          16384 /* 0x4000 Old flag for 4.1 protocol  */
+#define CLIENT_SECURE_CONNECTION 32768 /* 0x8000 New 4.1 authentication */
+#define CLIENT_MULTI_STATEMENTS (1UL << 16) /* 0x010000 Enable/disable multi-stmt support */
+#define CLIENT_MULTI_RESULTS    (1UL << 17) /* 0x020000 Enable/disable multi-results */
+#define CLIENT_PS_MULTI_RESULTS (1UL << 18) /* 0x040000 Multi-results in PS-protocol */
 
-#define CLIENT_PLUGIN_AUTH  (1UL << 19) /* Client supports plugin authentication */
-#define CLIENT_CONNECT_ATTRS (1UL << 20) /* Client supports connection attributes */
+#define CLIENT_PLUGIN_AUTH      (1UL << 19) /* 0x080000 Client supports plugin authentication */
+#define CLIENT_CONNECT_ATTRS    (1UL << 20) /* 0x100000 Client supports connection attributes */
 
 /* Enable authentication response packet to be larger than 255 bytes. */
-#define CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA (1UL << 21)
+#define CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA (1UL << 21) /* 0x200000 */
 
 /* Don't close the connection for a connection with expired password. */
-#define CLIENT_CAN_HANDLE_EXPIRED_PASSWORDS (1UL << 22)
+#define CLIENT_CAN_HANDLE_EXPIRED_PASSWORDS (1UL << 22) /* 0x400000 */
 
-#define CLIENT_SSL_VERIFY_SERVER_CERT (1UL << 30)
-#define CLIENT_REMEMBER_OPTIONS (1UL << 31)
+#define CLIENT_SSL_VERIFY_SERVER_CERT (1UL << 30) /* 0x40000000 */
+#define CLIENT_REMEMBER_OPTIONS (1UL << 31) /* 0x080000000 */
 
 #define CAN_CLIENT_COMPRESS 0
 
