@@ -291,8 +291,15 @@ handle_packet(connection *conn)
 					fprintf(stderr, "failed to login: %s\n", err);
 					free(err);
 				}	break;
+				case 0xfe:
+					fprintf(stderr, "authswithrequest: %s, %s\n",
+							&conn->pkt->buf[1],
+							&conn->pkt->buf[1 + strlen((char *)&conn->pkt->buf[1]) + 1]);
+					conn->state = FAIL;
+					break;
 				default:
-					fprintf(stderr, "unhandled response after login\n");
+					fprintf(stderr, "unhandled response after login: %X\n",
+							conn->pkt->buf[0]);
 					conn->state = FAIL;
 					break;
 			}
@@ -374,11 +381,26 @@ dispatch_connection(connection *conn, dispatcher *self)
 			}
 			break;
 		case SENDHANDSHAKERESPV10:
-			conn->props.capabilities = CLIENT_BASIC_FLAGS;
+			conn->props.capabilities =
+				CLIENT_LONG_PASSWORD |
+				CLIENT_LONG_FLAG |
+				CLIENT_LOCAL_FILES |
+				CLIENT_PROTOCOL_41 |
+				CLIENT_INTERACTIVE |
+				CLIENT_TRANSACTIONS |
+				CLIENT_SECURE_CONNECTION |
+				CLIENT_MULTI_STATEMENTS |
+				CLIENT_MULTI_RESULTS |
+				CLIENT_PS_MULTI_RESULTS |
+				CLIENT_PLUGIN_AUTH |
+				CLIENT_CONNECT_ATTRS |
+				CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA |
+				CLIENT_CAN_HANDLE_EXPIRED_PASSWORDS;
 			conn->props.username = strdup("test");
 			conn->props.passwd = strdup("test");
 			conn->props.auth = strdup("mysql_native_password");
 			conn->props.dbname = NULL;
+			conn->props.maxpktsize = 0x01000000;
 			send_handshakeresponsev41(conn->sock, conn->seq, &conn->props);
 			conn->state = AFTERLOGIN;
 			break;
