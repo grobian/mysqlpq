@@ -561,7 +561,7 @@ send_handshakeresponsev41(int fd, char seq, connprops *props)
 	packetbuf *buf = packetbuf_get();
 	SHA_CTX c;
 	unsigned char digest[SHA_DIGEST_LENGTH];
-	int capabilities = props->capabilities;
+	unsigned int capabilities = props->capabilities;
 	
 	if (props->dbname == NULL)
 		capabilities &= ~CLIENT_CONNECT_WITH_DB;
@@ -583,8 +583,16 @@ send_handshakeresponsev41(int fd, char seq, connprops *props)
 	push_int1(buf, props->charset);
 	push_int8(buf, 0); push_int8(buf, 0); push_int6(buf, 0); push_int1(buf, 0);
 	push_string(buf, props->username);
-	push_length_int(buf, sizeof(digest));
-	push_fixed_string(buf, sizeof(digest), (char *)digest);
+	if (capabilities & CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA) {
+		push_length_int(buf, sizeof(digest));
+		push_fixed_string(buf, sizeof(digest), (char *)digest);
+	} else if (capabilities & CLIENT_SECURE_CONNECTION) {
+		push_int1(buf, sizeof(digest));
+		push_fixed_string(buf, sizeof(digest), (char *)digest);
+	} else {
+		push_fixed_string(buf, sizeof(digest), (char *)digest);
+		push_int1(buf, 0);
+	}
 	if (capabilities & CLIENT_CONNECT_WITH_DB) {
 		push_string(buf, props->dbname);
 	}
