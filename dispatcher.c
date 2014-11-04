@@ -43,6 +43,7 @@ enum connstate {
 	RECVHANDSHAKEV10,
 	RECVHANDSHAKERESPV10,
 	SENDHANDSHAKERESPV10,
+	WAITUPSTREAMCONNS,
 	LOGINOK,
 	AFTERLOGIN,
 	INPUT,
@@ -65,6 +66,8 @@ typedef struct _connection {
 	char *query;
 	char *sqlstate;
 	char *errmsg;
+	int upstreamslen;
+	int *upstreams;
 } connection;
 
 typedef struct _dispatcher {
@@ -176,7 +179,7 @@ dispatch_addconnection(int sock, enum connstate istate)
 					fmtnow(nowbuf), connectionslen);
 
 			pthread_rwlock_unlock(&connectionslock);
-			return 1;
+			return -1;
 		}
 
 		memset(&newlst[connectionslen], '\0',
@@ -199,10 +202,12 @@ dispatch_addconnection(int sock, enum connstate istate)
 	connections[c].needmore = 0;
 	connections[c].wait = 0;
 	connections[c].state = istate;
+	connections[c].upstreamslen = 0;
+	connections[c].upstreams = NULL;
 	connections[c].takenby = 0;  /* now dispatchers will pick this one up */
 	acceptedconnections++;
 
-	return 0;
+	return c;
 }
 
 #if 0
@@ -277,7 +282,7 @@ handle_packet(connection *conn)
 			break;
 		case RECVHANDSHAKERESPV10:
 			recv_handshakeresponsev41(conn->pkt, &conn->props);
-			conn->state = LOGINOK;
+			conn->state = WAITUPSTREAMCONNS;
 			break;
 		case AFTERLOGIN:
 			switch (conn->pkt->buf[0]) {
@@ -351,13 +356,16 @@ dispatch_connection(connection *conn, dispatcher *self)
 			conn->props.auth = strdup("mysql_native_password");
 			conn->props.capabilities = CLIENT_BASIC_FLAGS;
 			send_handshakev10(conn->sock, conn->seq, &conn->props);
-			conn->state = RECVHANDSHAKERESPV10;
 			/* fork off connections to backends */
 			/* FIXME: this needs to be done asynchronously */
 			{
 				int fd;
 				struct sockaddr_in serv_addr;
 				char nowbuf[24];
+				int c;
+
+				conn->upstreamslen = 0;
+				conn->upstreams = malloc(sizeof(int) * 1); /* FIXME 1 server */
 
 				if ((fd = socket(PF_INET, SOCK_STREAM, 0)) < 0) {
 					fprintf(stderr, "[%s] failed to create socket: %s\n",
@@ -376,10 +384,30 @@ dispatch_connection(connection *conn, dispatcher *self)
 							fmtnow(nowbuf), strerror(errno));
 					break;
 				}
-				printf("connecting to mysql\n");
-				dispatch_addconnection(fd, RECVHANDSHAKEV10);
+
+				c = dispatch_addconnection(fd, RECVHANDSHAKEV10);
+				if (c >= 0)
+					conn->upstreams[conn->upstreamslen++] = c;
 			}
+			conn->state = RECVHANDSHAKERESPV10;
 			break;
+		case WAITUPSTREAMCONNS: {
+			int i;
+			
+			for (i = 0; i >= 0 && i < conn->upstreamslen; i++) {
+				switch (connections[conn->upstreams[i]].state) {
+					case READY:
+					case FAIL:
+						break;
+					default:
+						/* wait for the connections to commence */
+						i = -1;
+						break;
+				}
+			}
+			if (i > -1)
+				conn->state = LOGINOK;
+		}	break;
 		case SENDHANDSHAKERESPV10:
 			conn->props.capabilities =
 				CLIENT_LONG_PASSWORD |
@@ -404,16 +432,42 @@ dispatch_connection(connection *conn, dispatcher *self)
 			send_handshakeresponsev41(conn->sock, conn->seq, &conn->props);
 			conn->state = AFTERLOGIN;
 			break;
-		case LOGINOK:
-			send_ok(conn->sock, conn->seq, conn->props.capabilities);
+		case LOGINOK: {
+			int i;
+			int ready = 0;
+			int total = conn->upstreamslen;
+			char info[256];
+			for (i = 0; i < conn->upstreamslen; i++) {
+				switch (connections[conn->upstreams[i]].state) {
+					case READY:
+						ready++;
+						break;
+					case FAIL:
+						/* remove connections that aren't usable */
+						close(connections[conn->upstreams[i]].sock);
+						memmove(&conn->upstreams[i],
+								&conn->upstreams[i + 1],
+								--conn->upstreamslen - i);
+					default:
+						break;
+				}
+			}
+			snprintf(info, sizeof(info), "Logged in with %d out of %d "
+					"upstream connections active\n",
+					ready, total);
+			send_ok(conn->sock, conn->seq, conn->props.capabilities, info);
 			conn->state = INPUT;
-			break;
+		}	break;
 		case QUERY:
 			/* assume all endpoints are connected */
-			conn->state = QUERY_ERR;
-			conn->sqlstate = "PQ002";
-			conn->errmsg = "No connected endpoints";
-			//break;
+			if (conn->upstreams == NULL || conn->upstreamslen == 0) {
+				conn->state = QUERY_ERR;
+				conn->sqlstate = "PQ002";
+				conn->errmsg = "No connected endpoints";
+			} else {
+				/* TODO: actually do something */
+				break;
+			}
 		case QUERY_ERR:
 			send_err(conn->sock, conn->seq, conn->props.capabilities,
 					conn->sqlstate, conn->errmsg);
@@ -510,7 +564,7 @@ dispatch_runner(void *arg)
 									fmtnow(nowbuf), strerror(errno));
 							continue;
 						}
-						if (dispatch_addconnection(client, SENDHANDSHAKEV10) != 0) {
+						if (dispatch_addconnection(client, SENDHANDSHAKEV10) < 0) {
 							close(client);
 							continue;
 						}

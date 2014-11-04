@@ -693,10 +693,12 @@ recv_comquery(packetbuf *buf)
 }
 
 void
-send_ok(int fd, char seq, int capabilities)
+send_ok(int fd, char seq, int capabilities, char *info)
 {
 	packetbuf *buf = packetbuf_get();
-	char *info = "congratulations, you just logged in";
+	
+	if (info == NULL)
+		info = "";
 
 	push_int1(buf, MYSQL_OK);  /* OK packet header */
 	push_length_int(buf, 0);  /* affected rows */
