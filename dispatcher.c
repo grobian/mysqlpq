@@ -48,9 +48,12 @@ enum connstate {
 	AFTERLOGIN,
 	INPUT,
 	READY,
-	QUERY,
-	QUERY_ERR,
+	RESULT,
 	FAIL,
+	QUERY,
+	QUERY_SENT,
+	QUERY_FORWARDED,
+	QUERY_ERR,
 	QUIT
 };
 
@@ -58,12 +61,11 @@ typedef struct _connection {
 	int sock;
 	char takenby;   /* -2: being setup, -1: free, 0: not taken, >0: tid */
 	packetbuf *pkt;
+	char needpkt:1;
 	connprops props;
 	char seq;
-	char needmore:1;
 	time_t wait;
 	enum connstate state;
-	char *query;
 	char *sqlstate;
 	char *errmsg;
 	int upstreamslen;
@@ -199,7 +201,6 @@ dispatch_addconnection(int sock, enum connstate istate)
 	connections[c].pkt = NULL;
 	memset(&connections[c].props, 0, sizeof(connprops));
 	connections[c].seq = 0;
-	connections[c].needmore = 0;
 	connections[c].wait = 0;
 	connections[c].state = istate;
 	connections[c].upstreamslen = 0;
@@ -315,9 +316,7 @@ handle_packet(connection *conn)
 					conn->state = QUIT;
 					break;
 				case COM_QUERY: {
-					if (conn->query != NULL)
-						free(conn->query);
-					conn->query = recv_comquery(conn->pkt);
+					conn->needpkt = 1;
 					conn->state = QUERY;
 				}	break;
 				default:
@@ -326,8 +325,25 @@ handle_packet(connection *conn)
 					break;
 			}
 			break;
+		case QUERY_SENT:
+			switch (conn->pkt->buf[0]) {
+				case MYSQL_OK:
+					conn->needpkt = 1;
+					conn->state = READY;
+					break;
+				case MYSQL_ERR:
+					conn->needpkt = 1;
+					conn->state = FAIL;
+					break;
+				default:
+					conn->needpkt = 1;
+					conn->state = RESULT;
+					break;
+			}
+			break;
 		default:
-			fprintf(stderr, "don't know how to handle packet\n");
+			fprintf(stderr, "don't know how to handle packet in state %d\n",
+					conn->state);
 			break;
 	}
 
@@ -459,20 +475,84 @@ dispatch_connection(connection *conn, dispatcher *self)
 			conn->state = INPUT;
 		}	break;
 		case QUERY:
-			/* assume all endpoints are connected */
 			if (conn->upstreams == NULL || conn->upstreamslen == 0) {
+				packetbuf_free(conn->pkt);
+				conn->pkt = NULL;
 				conn->state = QUERY_ERR;
 				conn->sqlstate = "PQ002";
 				conn->errmsg = "No connected endpoints";
 			} else {
-				/* TODO: actually do something */
+				int i;
+
+				/* conn->pkt is the query pkt from the client, so we can
+				 * just send this to the upstream servers */
+				for (i = 0; i < conn->upstreamslen; i++) {
+					connection *c = &connections[conn->upstreams[i]];
+					printf("forwarding query to %d\n", i);
+					packetbuf_send(conn->pkt, conn->seq - 1, c->sock);
+					printf("sent query to %d\n", i);
+					c->state = QUERY_SENT;
+				}
+				packetbuf_free(conn->pkt);
+				conn->pkt = NULL;
+				conn->state = QUERY_FORWARDED;
 				break;
-			}
+			} /* fall through for err in first branch of if-case */
 		case QUERY_ERR:
 			send_err(conn->sock, conn->seq, conn->props.capabilities,
 					conn->sqlstate, conn->errmsg);
 			conn->state = INPUT;
 			break;
+		case QUERY_FORWARDED: {
+			int i;
+			int ready = -1;
+			int fail = -1;
+			int result = -1;
+
+			for (i = 0; i >= 0 && i < conn->upstreamslen; i++) {
+				switch (connections[conn->upstreams[i]].state) {
+					case READY:
+						ready = i;
+						break;
+					case FAIL:
+						fail = i;
+					case RESULT:
+						result = i;
+						break;
+					default:
+						/* wait for the connections to commence */
+						i = -1;
+						break;
+				}
+			}
+
+			if (i > -1) {
+				/* send back working answer */
+				if (result > -1) {
+					connection *c = &connections[conn->upstreams[result]];
+					packetbuf_send(c->pkt, c->seq - 1, conn->sock);
+				} else if (ready > -1) {
+					connection *c = &connections[conn->upstreams[ready]];
+					packetbuf_send(c->pkt, c->seq - 1, conn->sock);
+				} else if (fail > -1) {
+					connection *c = &connections[conn->upstreams[fail]];
+					packetbuf_send(c->pkt, c->seq - 1, conn->sock);
+				} else {
+					conn->state = QUERY_ERR;
+					conn->sqlstate = "PQ003";
+					conn->errmsg = "No answers from upstream servers ?!?";
+					break;
+				}
+
+				for (i = 0; i >= 0 && i < conn->upstreamslen; i++) {
+					connection *c = &connections[conn->upstreams[i]];
+					packetbuf_free(c->pkt);
+					c->pkt = NULL;
+				}
+
+				conn->state = INPUT;
+			}
+		}	break;
 		case QUIT:
 			/* take the easy way: just close the connection */
 			closedconnections++;
@@ -496,9 +576,12 @@ dispatch_connection(connection *conn, dispatcher *self)
 			/* FIXME handle errors */
 			if (packetbuf_recv_data(conn->pkt, conn->sock) > 0) {
 				/* packet done, deal with it */
+				conn->needpkt = 0;
 				handle_packet(conn);
-				packetbuf_free(conn->pkt);
-				conn->pkt = NULL;
+				if (!conn->needpkt) {
+					packetbuf_free(conn->pkt);
+					conn->pkt = NULL;
+				}
 			} else {
 				printf("got insufficient data\n");
 			}
