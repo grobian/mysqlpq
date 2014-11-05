@@ -561,22 +561,27 @@ send_handshakeresponsev41(int fd, char seq, connprops *props)
 	packetbuf *buf = packetbuf_get();
 	SHA_CTX c;
 	unsigned char digest[SHA_DIGEST_LENGTH];
+	unsigned char pdigest[SHA_DIGEST_LENGTH];
 	unsigned int capabilities = props->capabilities;
-	
+	int i;
+
 	if (props->dbname == NULL)
 		capabilities &= ~CLIENT_CONNECT_WITH_DB;
 
-	/* calculate sha1(<chal>sha1(sha1(passwd))) */
+	/* calculate sha1(passwd) xor sha1(<chal>sha1(sha1(passwd))) */
 	SHA1_Init(&c);
 	SHA1_Update(&c, props->passwd, strlen(props->passwd));
-	SHA1_Final(digest, &c);
+	SHA1_Final(pdigest, &c);
 	SHA1_Init(&c);
-	SHA1_Update(&c, digest, sizeof(digest));
+	SHA1_Update(&c, pdigest, sizeof(pdigest));
 	SHA1_Final(digest, &c);
 	SHA1_Init(&c);
 	SHA1_Update(&c, props->chal, strlen(props->chal));
 	SHA1_Update(&c, digest, sizeof(digest));
 	SHA1_Final(digest, &c);
+
+	for (i = 0; i < sizeof(digest); i++)
+		pdigest[i] ^= digest[i];
 
 	push_int4(buf, props->capabilities);
 	push_int4(buf, props->maxpktsize);
@@ -584,13 +589,13 @@ send_handshakeresponsev41(int fd, char seq, connprops *props)
 	push_int8(buf, 0); push_int8(buf, 0); push_int6(buf, 0); push_int1(buf, 0);
 	push_string(buf, props->username);
 	if (capabilities & CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA) {
-		push_length_int(buf, sizeof(digest));
-		push_fixed_string(buf, sizeof(digest), (char *)digest);
+		push_length_int(buf, sizeof(pdigest));
+		push_fixed_string(buf, sizeof(pdigest), (char *)pdigest);
 	} else if (capabilities & CLIENT_SECURE_CONNECTION) {
 		push_int1(buf, sizeof(digest));
-		push_fixed_string(buf, sizeof(digest), (char *)digest);
+		push_fixed_string(buf, sizeof(pdigest), (char *)pdigest);
 	} else {
-		push_fixed_string(buf, sizeof(digest), (char *)digest);
+		push_fixed_string(buf, sizeof(pdigest), (char *)pdigest);
 		push_int1(buf, 0);
 	}
 	if (capabilities & CLIENT_CONNECT_WITH_DB) {
