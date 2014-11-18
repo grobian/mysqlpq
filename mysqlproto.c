@@ -135,7 +135,23 @@ packetbuf_send(packetbuf *buf, char seq, int fd)
 	hdr->len[2] = (buf->len >> 16) & 0xFF;
 	hdr->seq = seq;
 
+#ifdef DEBUG
+	printf("sending pkt, len: %zd, seq: %d\n", buf->len, seq);
+#endif
 	return write(fd, hdr, sizeof(mysql_packet_hdr) + buf->len);
+}
+
+int
+packetbuf_forward(packetbuf *buf, int fd)
+{
+	mysql_packet_hdr *hdr = (void *)(buf->buf - sizeof(mysql_packet_hdr));
+	int len = hdr->len[0] + (hdr->len[1] << 8) + (hdr->len[2] << 16);
+
+#ifdef DEBUG
+	printf("forwarding pkt, len: %d, seq: %d\n", len, hdr->seq);
+#endif
+
+	return write(fd, hdr, sizeof(mysql_packet_hdr) + len);
 }
 
 packetbuf *
@@ -480,7 +496,6 @@ shift_string(packetbuf *buf)
 	return (char *)p;
 }
 
-#if 0
 static char *
 shift_length_string(packetbuf *buf)
 {
@@ -489,7 +504,6 @@ shift_length_string(packetbuf *buf)
 	len = shift_length_int(buf);
 	return shift_fixed_string(buf, (int)len);
 }
-#endif
 
 
 void
@@ -712,7 +726,7 @@ send_ok(int fd, char seq, int capabilities, char *info)
 		push_int2(buf, 0x0002);  /* auto-commit */
 		push_int2(buf, 0);  /* warnings */
 	}
-	if (capabilities & 0x00800000) {  /* CLIENT_SESSION_TRACK */
+	if (capabilities & CLIENT_SESSION_TRACK) {
 		push_length_string(buf, strlen(info), info);
 	} else {
 		push_fixed_string(buf, strlen(info), info);
@@ -723,6 +737,57 @@ send_ok(int fd, char seq, int capabilities, char *info)
 	}
 
 	packetbuf_free(buf);
+}
+
+mysql_ok *
+recv_ok(packetbuf *buf, int capabilities)
+{
+	mysql_ok *ret = malloc(sizeof(mysql_ok));
+
+	shift_int1(buf);  /* 0x00 */
+	ret->affrows = shift_length_int(buf);  /* affected rows */
+	ret->lastid = shift_length_int(buf);  /* last insert-id */
+	if (capabilities & CLIENT_PROTOCOL_41) {  /* must be */
+		ret->status_flags = shift_int2(buf);
+		ret->warnings = shift_int2(buf);
+	} else if (capabilities & CLIENT_TRANSACTIONS) {
+		ret->status_flags = shift_int2(buf);
+		ret->warnings = 0;
+	} else {
+		ret->status_flags = 0;
+		ret->warnings = 0;
+	}
+	if (capabilities & CLIENT_SESSION_TRACK) {
+		ret->status_info = shift_length_string(buf);
+		if (ret->status_flags & SERVER_SESSION_STATE_CHANGED) {
+			ret->session_state_info = shift_length_string(buf);
+		} else {
+			ret->session_state_info = NULL;
+		}
+	} else {
+		size_t avail = buf->len - (buf->pos - buf->buf);
+		ret->status_info = shift_fixed_string(buf, avail);
+		ret->session_state_info = NULL;
+	}
+
+	return ret;
+}
+
+mysql_eof *
+recv_eof(packetbuf *buf, int capabilities)
+{
+	mysql_eof *ret = malloc(sizeof(mysql_eof));
+
+	shift_int1(buf);  /* 0xfe */
+	if (capabilities & CLIENT_PROTOCOL_41) {  /* must be */
+		ret->warnings = shift_int2(buf);
+		ret->status_flags = shift_int2(buf);
+	} else {
+		ret->warnings = 0;
+		ret->status_flags = 0;
+	}
+
+	return ret;
 }
 
 void

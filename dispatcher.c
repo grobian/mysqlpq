@@ -49,11 +49,13 @@ enum connstate {
 	INPUT,
 	READY,
 	RESULT,
+	RESULT_EOF,
 	FAIL,
 	QUERY,
 	QUERY_SENT,
 	QUERY_FORWARDED,
 	QUERY_ERR,
+	RESULTSET,
 	QUIT
 };
 
@@ -70,6 +72,8 @@ typedef struct _connection {
 	char *errmsg;
 	int upstreamslen;
 	int *upstreams;
+	char goteof:1;
+	int upstream;
 } connection;
 
 typedef struct _dispatcher {
@@ -277,7 +281,6 @@ handle_packet(connection *conn)
 			if (recv_handshakev10(conn->pkt, &conn->props) == NULL) {
 				fprintf(stderr, "failed to parse package from server\n");
 			} else {
-				printf("got handshake\n");
 				conn->state = SENDHANDSHAKERESPV10;
 			}
 			break;
@@ -318,6 +321,7 @@ handle_packet(connection *conn)
 				case COM_QUERY: {
 					conn->needpkt = 1;
 					conn->state = QUERY;
+					fprintf(stderr, "seeing query pkt: %s\n", conn->pkt->buf + 1);
 				}	break;
 				default:
 					send_err(conn->sock, conn->seq, conn->props.capabilities,
@@ -334,6 +338,10 @@ handle_packet(connection *conn)
 				case MYSQL_ERR:
 					conn->needpkt = 1;
 					conn->state = FAIL;
+					break;
+				case MYSQL_EOF:
+					conn->needpkt = 1;
+					conn->state = RESULT_EOF;
 					break;
 				default:
 					conn->needpkt = 1;
@@ -365,7 +373,7 @@ dispatch_connection(connection *conn, dispatcher *self)
 	switch (conn->state) {
 		case SENDHANDSHAKEV10:
 			conn->props.sver = strdup("5.7-mysqlpq-" VERSION);
-			conn->props.status = 0x0002;  /* auto_commit */
+			conn->props.status = SERVER_STATUS_AUTOCOMMIT;
 			conn->props.connid = (int)acceptedconnections;
 			conn->props.charset = 0x21;  /* UTF-8 */
 			conn->props.chal = strdup("12345678123456789012");
@@ -489,7 +497,7 @@ dispatch_connection(connection *conn, dispatcher *self)
 				for (i = 0; i < conn->upstreamslen; i++) {
 					connection *c = &connections[conn->upstreams[i]];
 					printf("forwarding query to %d\n", i);
-					packetbuf_send(conn->pkt, conn->seq - 1, c->sock);
+					packetbuf_forward(conn->pkt, c->sock);
 					printf("sent query to %d\n", i);
 					c->state = QUERY_SENT;
 				}
@@ -515,7 +523,9 @@ dispatch_connection(connection *conn, dispatcher *self)
 						ready = i;
 						break;
 					case FAIL:
+					case RESULT_EOF:
 						fail = i;
+						break;
 					case RESULT:
 						result = i;
 						break;
@@ -530,13 +540,19 @@ dispatch_connection(connection *conn, dispatcher *self)
 				/* send back working answer */
 				if (result > -1) {
 					connection *c = &connections[conn->upstreams[result]];
-					packetbuf_send(c->pkt, c->seq - 1, conn->sock);
+					packetbuf_forward(c->pkt, conn->sock);
+					conn->upstream = result;
+					conn->goteof = 0;
+					conn->state = RESULTSET;
+					fprintf(stderr, "seen result, moving on to next packets\n");
 				} else if (ready > -1) {
 					connection *c = &connections[conn->upstreams[ready]];
-					packetbuf_send(c->pkt, c->seq - 1, conn->sock);
+					packetbuf_forward(c->pkt, conn->sock);
+					conn->state = INPUT;
 				} else if (fail > -1) {
 					connection *c = &connections[conn->upstreams[fail]];
-					packetbuf_send(c->pkt, c->seq - 1, conn->sock);
+					packetbuf_forward(c->pkt, conn->sock);
+					conn->state = INPUT;
 				} else {
 					conn->state = QUERY_ERR;
 					conn->sqlstate = "PQ003";
@@ -548,10 +564,77 @@ dispatch_connection(connection *conn, dispatcher *self)
 					connection *c = &connections[conn->upstreams[i]];
 					packetbuf_free(c->pkt);
 					c->pkt = NULL;
+					c->state = i != result ? READY : QUERY_SENT;
 				}
-
-				conn->state = INPUT;
 			}
+		}	break;
+		case RESULTSET: {
+			char done = 0;
+			connection *c = &connections[conn->upstreams[conn->upstream]];
+
+			/* Since resultsets consist of many packets, we need to keep
+			 * on forwarding packets, until we've sent everything.  This
+			 * is not as easy as it sounds, as the protocol basically
+			 * demands to look at the packets floating by in order to
+			 * determine if the result is "complete".  Because there are
+			 * two versions (using EOF or not) the logic consists of
+			 * finding the second EOF or an OK/ERR. */
+			fprintf(stderr, "probing next result\n");
+			switch (c->state) {
+				case READY: {
+					mysql_ok *ok = recv_ok(c->pkt, c->props.capabilities);
+					/* we should only see OK if the client doesn't
+					 * expect EOFs, so we can assume being done here */
+					done = !(ok->status_flags & SERVER_MORE_RESULTS_EXISTS);
+					if (ok->status_info)
+						free(ok->status_info);
+					if (ok->session_state_info)
+						free(ok->session_state_info);
+					free(ok);
+				}	break;
+				case FAIL:
+					/* whether or not we look for EOF, if we see ERR
+					 * it's the end for this sequence */
+					done = 1;
+					break;
+				case RESULT_EOF:
+					if (c->props.capabilities & CLIENT_DEPRECATE_EOF) {
+						/* barf, we don't expect this, let the client
+						 * deal with it */
+						fprintf(stderr, "got eof?!?\n");
+						done = 1;
+					} else if (conn->goteof) {
+						mysql_eof *eof =
+							recv_eof(c->pkt, c->props.capabilities);
+
+						/* last EOF, so end of this thing, unless
+						 * status_flags indicates more is to come */
+						done = !(eof->status_flags &
+								SERVER_MORE_RESULTS_EXISTS);
+						free(eof);
+					} else {
+						conn->goteof = 1;
+					}
+					break;
+				case RESULT:
+					break;
+				default:
+					/* wait for the next answer */
+					done = -1;
+					break;
+			}
+			if (done >= 0) {
+				packetbuf_forward(c->pkt, conn->sock);
+				packetbuf_free(c->pkt);
+				c->pkt = NULL;
+				if (done) {
+					c->state = READY;
+					conn->state = INPUT;
+				} else {
+					c->state = QUERY_SENT;
+				}
+			}
+			fprintf(stderr, "end probe, done: %d\n", done);
 		}	break;
 		case QUIT:
 			/* take the easy way: just close the connection */
@@ -565,6 +648,9 @@ dispatch_connection(connection *conn, dispatcher *self)
 			self->ticks += timediff(start, stop);
 			return 0;
 		case READY:
+		case RESULT:
+		case RESULT_EOF:
+		case FAIL:
 			break;
 		default:
 			if (conn->pkt == NULL)

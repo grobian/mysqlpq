@@ -26,6 +26,7 @@
 
 #define MYSQL_OK     0x00
 #define MYSQL_ERR    0xff
+#define MYSQL_EOF    0xfe
 
 #define CLIENT_LONG_PASSWORD         1 /* 0x01 new more secure passwords */
 #define CLIENT_FOUND_ROWS            2 /* 0x02 Found instead of affected rows */
@@ -55,6 +56,9 @@
 
 /* Don't close the connection for a connection with expired password. */
 #define CLIENT_CAN_HANDLE_EXPIRED_PASSWORDS (1UL << 22) /* 0x400000 */
+#define CLIENT_SESSION_TRACK (1UL << 23)    /* 0x800000 */
+
+#define CLIENT_DEPRECATE_EOF    (1UL << 24) /* 0x01000000 Expects OK iso EOF */
 
 #define CLIENT_SSL_VERIFY_SERVER_CERT (1UL << 30) /* 0x40000000 */
 #define CLIENT_REMEMBER_OPTIONS (1UL << 31) /* 0x080000000 */
@@ -93,6 +97,12 @@
                                                & ~CLIENT_COMPRESS) \
                                                & ~CLIENT_SSL_VERIFY_SERVER_CERT)
 
+/* these are Protocol::StatusFlags */
+#define SERVER_STATUS_IN_TRANS        0x0001
+#define SERVER_STATUS_AUTOCOMMIT      0x0002
+#define SERVER_MORE_RESULTS_EXISTS    0x0008
+#define SERVER_SESSION_STATE_CHANGED  0x4000
+
 typedef struct {
 	unsigned char *buf;
 	unsigned char *pos;
@@ -116,9 +126,24 @@ typedef struct {
 	char *attrs;
 } connprops;
 
+typedef struct {
+	long long int affrows;
+	long long int lastid;
+	short status_flags;
+	short warnings;
+	char *status_info;
+	char *session_state_info;
+} mysql_ok;
+
+typedef struct {
+	short status_flags;
+	short warnings;
+} mysql_eof;
+
 packetbuf *packetbuf_recv_hdr(int fd);
 int packetbuf_recv_data(packetbuf *buf, int fd);
 int packetbuf_send(packetbuf *buf, char seq, int fd);
+int packetbuf_forward(packetbuf *buf, int fd);
 void packetbuf_free(packetbuf *buf);
 
 int packetbuf_hdr_len(packetbuf *buf);
@@ -131,6 +156,8 @@ void send_handshakeresponsev41(int fd, char seq, connprops *props);
 char *recv_comquery(packetbuf *buf);
 
 void send_ok(int fd, char seq, int capabilities, char *info);
+mysql_ok *recv_ok(packetbuf *buf, int capabilities);
+mysql_eof *recv_eof(packetbuf *buf, int capabilities);
 void send_err(int fd, char seq, int capabilities, char *code, char *msg);
 char *recv_err(packetbuf *buf, int capabilities);
 
