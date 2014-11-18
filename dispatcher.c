@@ -323,6 +323,10 @@ handle_packet(connection *conn)
 					conn->state = QUERY;
 					fprintf(stderr, "seeing query pkt: %s\n", conn->pkt->buf + 1);
 				}	break;
+				case COM_INIT_DB:
+					conn->needpkt = 1;
+					conn->state = QUERY;
+					break;
 				default:
 					send_err(conn->sock, conn->seq, conn->props.capabilities,
 							"PQ001", "Unhandled command");
