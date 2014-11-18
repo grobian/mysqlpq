@@ -321,7 +321,6 @@ handle_packet(connection *conn)
 				case COM_QUERY: {
 					conn->needpkt = 1;
 					conn->state = QUERY;
-					fprintf(stderr, "seeing query pkt: %s\n", conn->pkt->buf + 1);
 				}	break;
 				case COM_INIT_DB:
 					conn->needpkt = 1;
@@ -500,9 +499,7 @@ dispatch_connection(connection *conn, dispatcher *self)
 				 * just send this to the upstream servers */
 				for (i = 0; i < conn->upstreamslen; i++) {
 					connection *c = &connections[conn->upstreams[i]];
-					printf("forwarding query to %d\n", i);
 					packetbuf_forward(conn->pkt, c->sock);
-					printf("sent query to %d\n", i);
 					c->state = QUERY_SENT;
 				}
 				packetbuf_free(conn->pkt);
@@ -548,7 +545,6 @@ dispatch_connection(connection *conn, dispatcher *self)
 					conn->upstream = result;
 					conn->goteof = 0;
 					conn->state = RESULTSET;
-					fprintf(stderr, "seen result, moving on to next packets\n");
 				} else if (ready > -1) {
 					connection *c = &connections[conn->upstreams[ready]];
 					packetbuf_forward(c->pkt, conn->sock);
@@ -583,7 +579,6 @@ dispatch_connection(connection *conn, dispatcher *self)
 			 * determine if the result is "complete".  Because there are
 			 * two versions (using EOF or not) the logic consists of
 			 * finding the second EOF or an OK/ERR. */
-			fprintf(stderr, "probing next result\n");
 			switch (c->state) {
 				case READY: {
 					mysql_ok *ok = recv_ok(c->pkt, c->props.capabilities);
@@ -605,7 +600,6 @@ dispatch_connection(connection *conn, dispatcher *self)
 					if (c->props.capabilities & CLIENT_DEPRECATE_EOF) {
 						/* barf, we don't expect this, let the client
 						 * deal with it */
-						fprintf(stderr, "got eof?!?\n");
 						done = 1;
 					} else if (conn->goteof) {
 						mysql_eof *eof =
@@ -638,7 +632,6 @@ dispatch_connection(connection *conn, dispatcher *self)
 					c->state = QUERY_SENT;
 				}
 			}
-			fprintf(stderr, "end probe, done: %d\n", done);
 		}	break;
 		case QUIT:
 			/* take the easy way: just close the connection */
