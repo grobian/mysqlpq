@@ -41,6 +41,7 @@ enum conntype {
 enum connstate {
 	SENDHANDSHAKEV10,
 	RECVHANDSHAKEV10,
+	HANDSHAKEV10_RECEIVED,
 	RECVHANDSHAKERESPV10,
 	SENDHANDSHAKERESPV10,
 	WAITUPSTREAMCONNS,
@@ -281,7 +282,7 @@ handle_packet(connection *conn)
 			if (recv_handshakev10(conn->pkt, &conn->props) == NULL) {
 				fprintf(stderr, "failed to parse package from server\n");
 			} else {
-				conn->state = SENDHANDSHAKERESPV10;
+				conn->state = HANDSHAKEV10_RECEIVED;
 			}
 			break;
 		case RECVHANDSHAKERESPV10:
@@ -384,7 +385,6 @@ dispatch_connection(connection *conn, dispatcher *self)
 			conn->props.capabilities = CLIENT_BASIC_FLAGS;
 			send_handshakev10(conn->sock, conn->seq, &conn->props);
 			/* fork off connections to backends */
-			/* FIXME: this needs to be done asynchronously */
 			{
 				int fd;
 				struct sockaddr_in serv_addr;
@@ -422,9 +422,34 @@ dispatch_connection(connection *conn, dispatcher *self)
 			int i;
 			
 			for (i = 0; i >= 0 && i < conn->upstreamslen; i++) {
-				switch (connections[conn->upstreams[i]].state) {
+				connection *c = &connections[conn->upstreams[i]];
+				switch (c->state) {
 					case READY:
 					case FAIL:
+						break;
+					case HANDSHAKEV10_RECEIVED:
+						c->props.capabilities =
+							CLIENT_LONG_PASSWORD |
+							CLIENT_LONG_FLAG |
+							CLIENT_LOCAL_FILES |
+							CLIENT_PROTOCOL_41 |
+							CLIENT_INTERACTIVE |
+							CLIENT_TRANSACTIONS |
+							CLIENT_SECURE_CONNECTION |
+							CLIENT_MULTI_STATEMENTS |
+							CLIENT_MULTI_RESULTS |
+							CLIENT_PS_MULTI_RESULTS |
+							CLIENT_PLUGIN_AUTH |
+							CLIENT_CONNECT_ATTRS |
+							CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA |
+							CLIENT_CAN_HANDLE_EXPIRED_PASSWORDS;
+						c->props.username = strdup("test");
+						c->props.passwd = strdup("test");
+						c->props.auth = strdup("mysql_native_password");
+						c->props.dbname = conn->props.dbname == NULL ?
+							NULL : strdup(conn->props.dbname);
+						c->props.maxpktsize = conn->props.maxpktsize;
+						c->state = SENDHANDSHAKERESPV10;
 						break;
 					default:
 						/* wait for the connections to commence */
@@ -436,26 +461,6 @@ dispatch_connection(connection *conn, dispatcher *self)
 				conn->state = LOGINOK;
 		}	break;
 		case SENDHANDSHAKERESPV10:
-			conn->props.capabilities =
-				CLIENT_LONG_PASSWORD |
-				CLIENT_LONG_FLAG |
-				CLIENT_LOCAL_FILES |
-				CLIENT_PROTOCOL_41 |
-				CLIENT_INTERACTIVE |
-				CLIENT_TRANSACTIONS |
-				CLIENT_SECURE_CONNECTION |
-				CLIENT_MULTI_STATEMENTS |
-				CLIENT_MULTI_RESULTS |
-				CLIENT_PS_MULTI_RESULTS |
-				CLIENT_PLUGIN_AUTH |
-				CLIENT_CONNECT_ATTRS |
-				CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA |
-				CLIENT_CAN_HANDLE_EXPIRED_PASSWORDS;
-			conn->props.username = strdup("test");
-			conn->props.passwd = strdup("test");
-			conn->props.auth = strdup("mysql_native_password");
-			conn->props.dbname = NULL;
-			conn->props.maxpktsize = 0x01000000;
 			send_handshakeresponsev41(conn->sock, conn->seq, &conn->props);
 			conn->state = AFTERLOGIN;
 			break;
