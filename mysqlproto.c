@@ -617,11 +617,10 @@ send_handshakeresponsev41(int fd, char seq, connprops *props)
 	SHA_CTX c;
 	unsigned char digest[SHA_DIGEST_LENGTH];
 	unsigned char pdigest[SHA_DIGEST_LENGTH];
-	unsigned int capabilities = props->capabilities;
 	int i;
 
 	if (props->dbname == NULL)
-		capabilities &= ~CLIENT_CONNECT_WITH_DB;
+		props->capabilities &= ~CLIENT_CONNECT_WITH_DB;
 
 	/* calculate sha1(passwd) xor sha1(<chal>sha1(sha1(passwd))) */
 	SHA1_Init(&c);
@@ -643,23 +642,23 @@ send_handshakeresponsev41(int fd, char seq, connprops *props)
 	push_int1(buf, props->charset);
 	push_int8(buf, 0); push_int8(buf, 0); push_int6(buf, 0); push_int1(buf, 0);
 	push_string(buf, props->username);
-	if (capabilities & CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA) {
+	if (props->capabilities & CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA) {
 		push_length_int(buf, sizeof(pdigest));
 		push_fixed_string(buf, sizeof(pdigest), (char *)pdigest);
-	} else if (capabilities & CLIENT_SECURE_CONNECTION) {
+	} else if (props->capabilities & CLIENT_SECURE_CONNECTION) {
 		push_int1(buf, sizeof(digest));
 		push_fixed_string(buf, sizeof(pdigest), (char *)pdigest);
 	} else {
 		push_fixed_string(buf, sizeof(pdigest), (char *)pdigest);
 		push_int1(buf, 0);
 	}
-	if (capabilities & CLIENT_CONNECT_WITH_DB) {
+	if (props->capabilities & CLIENT_CONNECT_WITH_DB) {
 		push_string(buf, props->dbname);
 	}
-	if (capabilities & CLIENT_PLUGIN_AUTH) {
+	if (props->capabilities & CLIENT_PLUGIN_AUTH) {
 		push_string(buf, props->auth);
 	}
-	if (capabilities & CLIENT_CONNECT_ATTRS) {
+	if (props->capabilities & CLIENT_CONNECT_ATTRS) {
 		push_length_int(buf,
 				1 + strlen("_client_name") +
 				1 + strlen("mysqlpq") +
