@@ -434,7 +434,12 @@ dispatch_connection(connection *conn, dispatcher *self)
 					case FAIL:
 						break;
 					case HANDSHAKEV10_RECEIVED:
-						c->props.capabilities =
+						c->props.capabilities &= conn->props.capabilities;
+						/* get rid of CLIENT_SESSION_TRACK because it
+						 * means the server can send stuff after an OK
+						 * packet */
+						c->props.capabilities &= ~CLIENT_SESSION_TRACK;
+/*
 							CLIENT_LONG_PASSWORD |
 							CLIENT_LONG_FLAG |
 							CLIENT_LOCAL_FILES |
