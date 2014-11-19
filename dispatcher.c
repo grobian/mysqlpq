@@ -344,9 +344,15 @@ handle_packet(connection *conn)
 					conn->state = FAIL;
 					break;
 				case MYSQL_EOF:
-					conn->needpkt = 1;
-					conn->state = RESULT_EOF;
-					break;
+					/* the EOF packet may appear in places where a
+					 * Protocol::LengthEncodedInteger may appear. You
+					 * must check whether the packet length is less than
+					 * 9 to make sure that it is a EOF packet */
+					if (packetbuf_hdr_len(conn->pkt) < 9) {
+						conn->needpkt = 1;
+						conn->state = RESULT_EOF;
+						break;
+					}
 				default:
 					conn->needpkt = 1;
 					conn->state = RESULT;
