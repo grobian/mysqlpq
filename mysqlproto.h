@@ -92,6 +92,8 @@
                            | CLIENT_CONNECT_ATTRS \
                            | CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA \
                            | CLIENT_CAN_HANDLE_EXPIRED_PASSWORDS \
+                           | CLIENT_DEPRECATE_EOF \
+                           | CLIENT_REMEMBER_OPTIONS \
 )
 
 #define CLIENT_BASIC_FLAGS (((CLIENT_ALL_FLAGS & ~CLIENT_SSL) \
