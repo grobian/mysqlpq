@@ -598,11 +598,10 @@ dispatch_connection(connection *conn, dispatcher *self)
 					done = 1;
 					break;
 				case RESULT_EOF:
-					if (c->props.capabilities & CLIENT_DEPRECATE_EOF) {
-						/* barf, we don't expect this, let the client
-						 * deal with it */
-						done = 1;
-					} else if (conn->goteof) {
+					/* the case where we've set CLIENT_DEPRECATE_EOF
+					 * seems to be violated in practise, so just accept
+					 * EOF if we see it and act as if we're in EOF mode */
+					if (conn->goteof) {
 						mysql_eof *eof =
 							recv_eof(c->pkt, c->props.capabilities);
 
