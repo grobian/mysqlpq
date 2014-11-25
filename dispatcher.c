@@ -476,6 +476,8 @@ dispatch_connection(connection *conn, dispatcher *self)
 						memmove(&conn->upstreams[i],
 								&conn->upstreams[i + 1],
 								--conn->upstreamslen - i);
+						i--;  /* force evaluation of item put in place */
+						break;
 					default:
 						break;
 				}
