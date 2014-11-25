@@ -28,6 +28,7 @@
 #include <sys/socket.h>
 #include <sys/resource.h>
 #include <arpa/inet.h>
+#include <netdb.h>
 
 #include "mysqlpq.h"
 #include "collector.h"
@@ -398,33 +399,55 @@ dispatch_connection(connection *conn, dispatcher *self)
 				char nowbuf[24];
 				int c;
 				int i;
+				struct addrinfo hints, *res, *res0;
+				int error;
+				const char *cause = NULL;
 
 				conn->upstreamslen = 0;
 				conn->upstreams = malloc(sizeof(int) * connect_host_cnt);
 
 				for (i = 0; i < connect_host_cnt; i++) {
-					if ((fd = socket(PF_INET, SOCK_STREAM, 0)) < 0) {
-						fprintf(stderr, "[%s] failed to create socket: %s\n",
-								fmtnow(nowbuf), strerror(errno));
-						break;
-					}
-
-					serv_addr.sin_family = PF_INET;
-					serv_addr.sin_port = htons(3306);
-					inet_pton(PF_INET, connect_hosts[i], &serv_addr.sin_addr);
-
-					if (connect(fd,
-								(struct sockaddr *)&serv_addr,
-								sizeof(serv_addr)))
+					memset(&hints, 0, sizeof(hints));
+					hints.ai_family = PF_UNSPEC;
+					hints.ai_socktype = SOCK_STREAM;
+					if ((error = getaddrinfo(connect_hosts[i], "3306",
+							&hints, &res0)) != 0)
 					{
-						fprintf(stderr, "[%s] failed to connect socket: %s\n",
-								fmtnow(nowbuf), strerror(errno));
-						break;
+						fprintf(stderr, "[%s] failed to resolve %s: %s\n",
+								fmtnow(nowbuf), connect_hosts[i],
+								gai_strerror(error));
+						continue;
 					}
 
-					c = dispatch_addconnection(fd, RECVHANDSHAKEV10);
-					if (c >= 0)
-						conn->upstreams[conn->upstreamslen++] = c;
+					fd = -1;
+					for (res = res0; res; res = res->ai_next) {
+						if ((fd = socket(res->ai_family, res->ai_socktype,
+										res->ai_protocol)) < 0)
+						{
+							cause = "create";
+							fprintf(stderr, "[%s] failed to create socket: %s\n",
+									fmtnow(nowbuf), strerror(errno));
+							continue;
+						}
+
+
+						if (connect(fd, res->ai_addr, res->ai_addrlen) < 0) {
+							cause = "connect";
+							close(fd);
+							fd = -1;
+							continue;
+						}
+
+						c = dispatch_addconnection(fd, RECVHANDSHAKEV10);
+						if (c >= 0)
+							conn->upstreams[conn->upstreamslen++] = c;
+					}
+					if (fd < 0) {
+						fprintf(stderr, "[%s] failed to %s socket: %s\n",
+								fmtnow(nowbuf), cause, strerror(errno));
+						break;
+					}
+					freeaddrinfo(res0);
 				}
 			}
 			conn->state = RECVHANDSHAKERESPV10;
