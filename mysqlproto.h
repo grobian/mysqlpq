@@ -19,15 +19,16 @@
 
 #define COM_QUIT_STR "\x01\x00\x00\x00\x01"
 
-#define COM_QUIT     0x01
-#define COM_INIT_DB  0x02
-#define COM_QUERY    0x03
-#define COM_CONNECT  0x0b
-#define COM_PING     0x0e
+#define COM_QUIT       0x01
+#define COM_INIT_DB    0x02
+#define COM_QUERY      0x03
+#define COM_CONNECT    0x0b
+#define COM_PING       0x0e
+#define COM_STATISTICS 0x09
 
-#define MYSQL_OK     0x00
-#define MYSQL_ERR    0xff
-#define MYSQL_EOF    0xfe
+#define MYSQL_OK       0x00
+#define MYSQL_ERR      0xff
+#define MYSQL_EOF      0xfe
 
 #define CLIENT_LONG_PASSWORD         1 /* 0x01 new more secure passwords */
 #define CLIENT_FOUND_ROWS            2 /* 0x02 Found instead of affected rows */
