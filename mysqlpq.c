@@ -33,6 +33,7 @@ char *connect_username = NULL;
 char *connect_passwd = NULL;
 char **connect_hosts = NULL;
 int connect_host_cnt = 0;
+int startuptime = 0;
 
 
 static void
@@ -122,6 +123,7 @@ main(int argc, char * const argv[])
 	enum rmode mode = mNORMAL;
 	int ch;
 	char nowbuf[24];
+	time_t now;
 
 	if (gethostname(mysqlpq_hostname, sizeof(mysqlpq_hostname)) < 0)
 		snprintf(mysqlpq_hostname, sizeof(mysqlpq_hostname), "127.0.0.1");
@@ -184,6 +186,9 @@ main(int argc, char * const argv[])
 
 	/* seed randomiser for dispatcher and aggregator "splay" */
 	srand(time(NULL));
+
+	time(&now);
+	startuptime = (int)now;
 
 	if (workercnt == 0)
 		workercnt = 16;
