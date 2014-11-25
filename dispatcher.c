@@ -397,31 +397,35 @@ dispatch_connection(connection *conn, dispatcher *self)
 				struct sockaddr_in serv_addr;
 				char nowbuf[24];
 				int c;
+				int i;
 
 				conn->upstreamslen = 0;
-				conn->upstreams = malloc(sizeof(int) * 1); /* FIXME 1 server */
+				conn->upstreams = malloc(sizeof(int) * connect_host_cnt);
 
-				if ((fd = socket(PF_INET, SOCK_STREAM, 0)) < 0) {
-					fprintf(stderr, "[%s] failed to create socket: %s\n",
-							fmtnow(nowbuf), strerror(errno));
-					break;
+				for (i = 0; i < connect_host_cnt; i++) {
+					if ((fd = socket(PF_INET, SOCK_STREAM, 0)) < 0) {
+						fprintf(stderr, "[%s] failed to create socket: %s\n",
+								fmtnow(nowbuf), strerror(errno));
+						break;
+					}
+
+					serv_addr.sin_family = PF_INET;
+					serv_addr.sin_port = htons(3306);
+					inet_pton(PF_INET, connect_hosts[i], &serv_addr.sin_addr);
+
+					if (connect(fd,
+								(struct sockaddr *)&serv_addr,
+								sizeof(serv_addr)))
+					{
+						fprintf(stderr, "[%s] failed to connect socket: %s\n",
+								fmtnow(nowbuf), strerror(errno));
+						break;
+					}
+
+					c = dispatch_addconnection(fd, RECVHANDSHAKEV10);
+					if (c >= 0)
+						conn->upstreams[conn->upstreamslen++] = c;
 				}
-
-				serv_addr.sin_family = PF_INET;
-				serv_addr.sin_port = htons(3306);
-				inet_pton(PF_INET, "localhost", &serv_addr.sin_addr);
-
-				if (connect(fd,
-							(struct sockaddr *)&serv_addr, sizeof(serv_addr)))
-				{
-					fprintf(stderr, "[%s] failed to connect socket: %s\n",
-							fmtnow(nowbuf), strerror(errno));
-					break;
-				}
-
-				c = dispatch_addconnection(fd, RECVHANDSHAKEV10);
-				if (c >= 0)
-					conn->upstreams[conn->upstreamslen++] = c;
 			}
 			conn->state = RECVHANDSHAKERESPV10;
 			break;
