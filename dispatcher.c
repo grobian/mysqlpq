@@ -478,7 +478,7 @@ dispatch_connection(connection *conn, dispatcher *self)
 						break;
 					case FAIL:
 						/* remove connections that aren't usable */
-						close(connections[conn->upstreams[i]].sock);
+						connections[conn->upstreams[i]].state = QUIT;
 						memmove(&conn->upstreams[i],
 								&conn->upstreams[i + 1],
 								--conn->upstreamslen - i);
