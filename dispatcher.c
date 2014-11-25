@@ -302,7 +302,7 @@ handle_packet(connection *conn)
 					free(err);
 					conn->state = FAIL;
 				}	break;
-				case 0xfe:
+				case MYSQL_EOF:
 					fprintf(stderr, "authswithrequest: %s, %s\n",
 							&conn->pkt->buf[1],
 							&conn->pkt->buf[1 + strlen((char *)&conn->pkt->buf[1]) + 1]);
