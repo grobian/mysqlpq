@@ -21,6 +21,10 @@
 #define VERSION "0.1"
 
 extern char mysqlpq_hostname[];
+extern char *connect_username;
+extern char *connect_passwd;
+extern char **connect_hosts;
+extern int connect_host_cnt;
 
 char *fmtnow(char nowbuf[24]);
 

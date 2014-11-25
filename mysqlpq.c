@@ -29,6 +29,10 @@
 
 int keep_running = 1;
 char mysqlpq_hostname[128];
+char *connect_username = NULL;
+char *connect_passwd = NULL;
+char **connect_hosts = NULL;
+int connect_host_cnt = 0;
 
 
 static void
@@ -87,7 +91,7 @@ do_usage(int exitcode)
 	printf("\n");
 	printf("Options:\n");
 	printf("  -v  print version and exit\n");
-	printf("  -f  read <config> for clusters and routes\n");
+	printf("  -f  read <config> for backends\n");
 	printf("  -p  listen on <port> for connections, defaults to 3306\n");
 	printf("  -w  user <workers> worker threads, defaults to 16\n");
 	printf("  -b  server send batch size, defaults to 2500\n");
@@ -111,7 +115,7 @@ main(int argc, char * const argv[])
 	char id;
 	dispatcher **workers;
 	char workercnt = 0;
-	char *routes = NULL;
+	char *config = NULL;
 	unsigned short listenport = 3306;
 	int batchsize = 2500;
 	int queuesize = 25000;
@@ -131,7 +135,7 @@ main(int argc, char * const argv[])
 				mode = mDEBUG;
 				break;
 			case 'f':
-				routes = optarg;
+				config = optarg;
 				break;
 			case 'p':
 				listenport = (unsigned short)atoi(optarg);
@@ -174,7 +178,7 @@ main(int argc, char * const argv[])
 				break;
 		}
 	}
-	if (optind == 1 || routes == NULL)
+	if (optind == 1 || config == NULL)
 		do_usage(1);
 
 
@@ -200,8 +204,54 @@ main(int argc, char * const argv[])
 	fprintf(stdout, "    server queue size = %d\n", queuesize);
 	if (mode == mDEBUG)
 		fprintf(stdout, "    debug = true\n");
-	fprintf(stdout, "    routes configuration = %s\n", routes);
+	fprintf(stdout, "    configuration = %s\n", config);
 	fprintf(stdout, "\n");
+
+	/* lame config reading */
+	{
+		FILE *c = fopen(config, "r");
+		char buf[64];
+		char *p;
+		if (c == NULL) {
+			fprintf(stderr, "failed to open %s: %s\n", config, strerror(errno));
+			return 1;
+		}
+		if (fgets(buf, sizeof(buf), c) != NULL) {
+			for (p = buf; *p != '\0'; p++)
+				if (*p == '\n') {
+					*p = '\0';
+					break;
+				}
+			connect_username = strdup(buf);
+		}
+		if (fgets(buf, sizeof(buf), c) != NULL) {
+			for (p = buf; *p != '\0'; p++)
+				if (*p == '\n') {
+					*p = '\0';
+					break;
+				}
+			connect_passwd = strdup(buf);
+		}
+		if (fgets(buf, sizeof(buf), c) != NULL) {
+			int i = 1;
+			char *q;
+			char **hosts;
+			for (p = buf; *p != '\0'; p++)
+				if (*p == ',')
+					i++;
+			hosts = connect_hosts = malloc(sizeof(char *) * i);
+			connect_host_cnt = i;
+			for (p = buf, q = buf; *p != '\0'; p++)
+				if (*p == ',') {
+					*p = '\0';
+					*hosts++ = strdup(q);
+					q = p + 1;
+				} else if (*p == '\n') {
+					*p = '\0';
+				}
+			*hosts = strdup(q);
+		}
+	}
 
 	if (signal(SIGINT, exit_handler) == SIG_ERR) {
 		fprintf(stderr, "failed to create SIGINT handler: %s\n",
