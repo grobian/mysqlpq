@@ -296,10 +296,11 @@ handle_packet(connection *conn)
 					break;
 				case MYSQL_ERR: {
 					char *err;
-					conn->state = FAIL;
 					err = recv_err(conn->pkt, conn->props.capabilities);
-					fprintf(stderr, "failed to login: %s\n", err);
+					fprintf(stderr, "[%d/%s] failed to login: %s\n",
+							conn->props.connid, conn->props.sver, err);
 					free(err);
+					conn->state = FAIL;
 				}	break;
 				case 0xfe:
 					fprintf(stderr, "authswithrequest: %s, %s\n",
