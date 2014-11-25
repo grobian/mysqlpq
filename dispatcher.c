@@ -446,8 +446,8 @@ dispatch_connection(connection *conn, dispatcher *self)
 						 * means the server can send stuff after an OK
 						 * packet */
 						c->props.capabilities &= ~CLIENT_SESSION_TRACK;
-						c->props.username = strdup("test");
-						c->props.passwd = strdup("test");
+						c->props.username = strdup(connect_username);
+						c->props.passwd = strdup(connect_passwd);
 						c->props.auth = strdup("mysql_native_password");
 						c->props.dbname = conn->props.dbname == NULL ?
 							NULL : strdup(conn->props.dbname);
