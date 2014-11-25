@@ -395,7 +395,6 @@ dispatch_connection(connection *conn, dispatcher *self)
 			/* fork off connections to backends */
 			{
 				int fd;
-				struct sockaddr_in serv_addr;
 				char nowbuf[24];
 				int c;
 				int i;
