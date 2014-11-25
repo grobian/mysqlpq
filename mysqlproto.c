@@ -850,6 +850,20 @@ send_err(int fd, char seq, int capabilities, char *sqlstate, char *msg)
 	packetbuf_free(buf);
 }
 
+void
+send_eof_str(int fd, char seq, char *msg)
+{
+	packetbuf *buf = packetbuf_get();
+
+	push_fixed_string(buf, strlen(msg), msg);
+
+	if (packetbuf_send(buf, seq, fd) == -1) {
+		fprintf(stderr, "failed to send eof str: %s\n", strerror(errno));
+	}
+
+	packetbuf_free(buf);
+}
+
 char *
 recv_err(packetbuf *buf, int capabilities)
 {
