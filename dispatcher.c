@@ -442,8 +442,9 @@ dispatch_connection(connection *conn, dispatcher *self)
 							conn->upstreams[conn->upstreamslen++] = c;
 					}
 					if (fd < 0) {
-						fprintf(stderr, "[%s] failed to %s socket: %s\n",
-								fmtnow(nowbuf), cause, strerror(errno));
+						fprintf(stderr, "[%s] failed to %s socket for %s:3306: %s\n",
+								fmtnow(nowbuf), cause,
+								connect_hosts[i], strerror(errno));
 						break;
 					}
 					freeaddrinfo(res0);
