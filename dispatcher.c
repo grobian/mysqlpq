@@ -321,6 +321,24 @@ handle_packet(connection *conn)
 				case COM_QUIT:
 					conn->state = QUIT;
 					break;
+				case COM_STATISTICS: {
+					char buf[512];
+					time_t now;
+					time(&now);
+					snprintf(buf, sizeof(buf),
+							"Uptime: %d  "
+							"Accepted connections: %zd  "
+							"Closed connections: %zd  "
+							"Connected backends: %d"
+							,
+							(int)now - startuptime,
+							acceptedconnections,
+							closedconnections,
+							conn->upstreamslen
+							);
+					printf("%s\n", buf);
+					send_eof_str(conn->sock, conn->seq, buf);
+				}	break;
 				case COM_QUERY: {
 					conn->needpkt = 1;
 					conn->state = QUERY;
