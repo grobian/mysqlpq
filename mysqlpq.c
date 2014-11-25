@@ -210,7 +210,7 @@ main(int argc, char * const argv[])
 	/* lame config reading */
 	{
 		FILE *c = fopen(config, "r");
-		char buf[64];
+		char buf[256];
 		char *p;
 		if (c == NULL) {
 			fprintf(stderr, "failed to open %s: %s\n", config, strerror(errno));
