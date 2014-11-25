@@ -431,12 +431,14 @@ dispatch_connection(connection *conn, dispatcher *self)
 			break;
 		case WAITUPSTREAMCONNS: {
 			int i;
+			char ok = 0;
 			
 			for (i = 0; i >= 0 && i < conn->upstreamslen; i++) {
 				connection *c = &connections[conn->upstreams[i]];
 				switch (c->state) {
 					case READY:
 					case FAIL:
+						ok = 1;
 						break;
 					case HANDSHAKEV10_RECEIVED:
 						c->props.capabilities &= conn->props.capabilities;
@@ -454,11 +456,10 @@ dispatch_connection(connection *conn, dispatcher *self)
 						break;
 					default:
 						/* wait for the connections to commence */
-						i = -1;
 						break;
 				}
 			}
-			if (i > -1)
+			if (ok == 1)
 				conn->state = LOGINOK;
 		}	break;
 		case SENDHANDSHAKERESPV10:
