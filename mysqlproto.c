@@ -747,24 +747,34 @@ recv_comquery(packetbuf *buf)
 }
 
 void
-send_ok(int fd, char seq, int capabilities, char *info)
+send_ok(int fd, char seq, int capabilities, mysql_ok *data)
 {
 	packetbuf *buf = packetbuf_get();
+	char *t;
 	
-	if (info == NULL)
-		info = "";
-
 	push_int1(buf, MYSQL_OK);  /* OK packet header */
-	push_length_int(buf, 0);  /* affected rows */
-	push_length_int(buf, 0);  /* last inserted id */
+	push_length_int(buf, data->affrows);  /* affected rows */
+	push_length_int(buf, data->lastid);  /* last inserted id */
 	if (capabilities & CLIENT_PROTOCOL_41) {  /* must be */
-		push_int2(buf, 0x0002);  /* auto-commit */
-		push_int2(buf, 0);  /* warnings */
+		push_int2(buf, data->status_flags);
+		push_int2(buf, data->warnings);
 	}
 	if (capabilities & CLIENT_SESSION_TRACK) {
-		push_length_string(buf, strlen(info), info);
+		t = data->status_info;
+		if (t == NULL)
+			t = "";
+		push_length_string(buf, strlen(t), t);
+		if (data->status_flags & SERVER_SESSION_STATE_CHANGED) {
+			t = data->session_state_info;
+			if (t == NULL)
+				t = "";
+			push_length_string(buf, strlen(t), t);
+		}
 	} else {
-		push_fixed_string(buf, strlen(info), info);
+		t = data->status_info;
+		if (t == NULL)
+			t = "";
+		push_fixed_string(buf, strlen(t), t);
 	}
 
 	if (packetbuf_send(buf, seq, fd) == -1) {

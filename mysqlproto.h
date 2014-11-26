@@ -159,7 +159,7 @@ int recv_handshakeresponsev41(packetbuf *buf, connprops *props);
 void send_handshakeresponsev41(int fd, char seq, connprops *props);
 char *recv_comquery(packetbuf *buf);
 
-void send_ok(int fd, char seq, int capabilities, char *info);
+void send_ok(int fd, char seq, int capabilities, mysql_ok *data);
 mysql_ok *recv_ok(packetbuf *buf, int capabilities);
 mysql_eof *recv_eof(packetbuf *buf, int capabilities);
 void send_err(int fd, char seq, int capabilities, char *code, char *msg);

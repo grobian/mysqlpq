@@ -512,6 +512,8 @@ dispatch_connection(connection *conn, dispatcher *self)
 			int ready = 0;
 			int total = conn->upstreamslen;
 			char info[256];
+			mysql_ok ok;
+
 			for (i = 0; i < conn->upstreamslen; i++) {
 				switch (connections[conn->upstreams[i]].state) {
 					case READY:
@@ -532,7 +534,13 @@ dispatch_connection(connection *conn, dispatcher *self)
 			snprintf(info, sizeof(info), "Logged in with %d out of %d "
 					"upstream connections active\n",
 					ready, total);
-			send_ok(conn->sock, conn->seq, conn->props.capabilities, info);
+			ok.affrows = 0;
+			ok.lastid = 0;
+			ok.status_flags = 0x0002;  /* auto_commit */
+			ok.warnings = 0;
+			ok.status_info = info;
+			ok.session_state_info = NULL;
+			send_ok(conn->sock, conn->seq, conn->props.capabilities, &ok);
 			conn->state = INPUT;
 		}	break;
 		case QUERY:
