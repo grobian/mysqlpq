@@ -161,6 +161,7 @@ char *recv_comquery(packetbuf *buf);
 
 void send_ok(int fd, char seq, int capabilities, mysql_ok *data);
 mysql_ok *recv_ok(packetbuf *buf, int capabilities);
+void send_eof(int fd, char seq, int capabillities, mysql_eof *data);
 mysql_eof *recv_eof(packetbuf *buf, int capabilities);
 void send_err(int fd, char seq, int capabilities, char *code, char *msg);
 void send_eof_str(int fd, char seq, char *msg);

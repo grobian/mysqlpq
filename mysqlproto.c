@@ -170,7 +170,8 @@ packetbuf_send(packetbuf *buf, char seq, int fd)
 	hdr->seq = seq;
 
 #ifdef DEBUG
-	printf("sending pkt, len: %zd, seq: %d\n", buf->len, seq);
+	printf("fd %d: sending pkt, len: %zd, seq: %d, *buf: 0x%02x\n",
+			fd, buf->len, seq, *buf->buf);
 #endif
 	return write(fd, hdr, sizeof(mysql_packet_hdr) + buf->len);
 }
@@ -182,7 +183,7 @@ packetbuf_forward(packetbuf *buf, int fd)
 	int len = hdr->len[0] + (hdr->len[1] << 8) + (hdr->len[2] << 16);
 
 #ifdef DEBUG
-	printf("forwarding pkt, len: %d, seq: %d\n", len, hdr->seq);
+	printf("fd %d: forwarding pkt, len: %d, seq: %d\n", fd, len, hdr->seq);
 #endif
 
 	return write(fd, hdr, sizeof(mysql_packet_hdr) + len);
@@ -198,6 +199,11 @@ packetbuf_recv_hdr(int fd)
 		packetbuf_free(ret);
 		return NULL;
 	}
+
+#if DEBUG > 1
+	printf("fd %d: received header, len: %d, seq: %d\n", fd,
+			packetbuf_hdr_len(ret), hdr->seq);
+#endif
 
 	return ret;
 }
@@ -216,6 +222,10 @@ packetbuf_recv_data(packetbuf *buf, int fd)
 	readlen = read(fd, buf->buf + buf->len, wantlen);
 
 	if (readlen == wantlen) {
+#ifdef DEBUG
+	printf("fd %d: received packet, len: %d, seq: %d, *buf: 0x%02x\n",
+			fd, wantlen, packetbuf_hdr_seq(buf), *buf->buf);
+#endif
 		return buf->len += readlen;
 	} else if ((readlen == -1 &&
 			(errno == EINTR ||
@@ -686,7 +696,7 @@ send_handshakeresponsev41(int fd, char seq, connprops *props)
 int
 recv_handshakeresponsev41(packetbuf *buf, connprops *props)
 {
-	int capabilities = shift_int2(buf);
+	unsigned int capabilities = shift_int2(buf);
 
 	if ((capabilities & CLIENT_PROTOCOL_41) == 0) {
 		fprintf(stderr, "client not v41 :(\n");
@@ -698,7 +708,7 @@ recv_handshakeresponsev41(packetbuf *buf, connprops *props)
 		capabilities += (shift_int2(buf) >> 16);  /* 4 bytes in v41 */
 
 #ifdef DEBUG
-	printf("capabilities:");
+	printf("received capabilities:");
 	PRINT_ALL_CAPABILITIES(capabilities);
 	printf("\n");
 #endif
@@ -816,6 +826,36 @@ recv_ok(packetbuf *buf, int capabilities)
 	}
 
 	return ret;
+}
+
+void
+send_eof(int fd, char seq, int capabilities, mysql_eof *data)
+{
+	packetbuf *buf = packetbuf_get();
+
+	push_int1(buf, MYSQL_EOF);  /* EOF packet header */
+	if (capabilities & CLIENT_PROTOCOL_41) {  /* must be */
+		push_int2(buf, data->warnings);
+		push_int2(buf, data->status_flags);
+	}
+
+	if (packetbuf_send(buf, seq, fd) == -1) {
+		fprintf(stderr, "failed to send eof: %s\n", strerror(errno));
+	}
+
+#ifdef DEBUG
+	{
+		int i;
+		printf("send_eof(%zd, %d, %d):",
+				buf->len, data->warnings, data->status_flags);
+		for (i = 0; i < buf->len; i++) {
+			printf(" %02x", buf->pos[i]);
+		}
+		printf("\n");
+	}
+#endif
+
+	packetbuf_free(buf);
 }
 
 mysql_eof *

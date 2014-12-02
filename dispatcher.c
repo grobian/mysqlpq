@@ -29,6 +29,7 @@
 #include <sys/resource.h>
 #include <arpa/inet.h>
 #include <netdb.h>
+#include <assert.h>
 
 #include "mysqlpq.h"
 #include "collector.h"
@@ -57,6 +58,7 @@ enum connstate {
 	QUERY_SENT,
 	QUERY_FORWARDED,
 	QUERY_ERR,
+	HANDLED,
 	RESULTSET,
 	QUIT
 };
@@ -65,7 +67,7 @@ typedef struct _connection {
 	int sock;
 	char takenby;   /* -2: being setup, -1: free, 0: not taken, >0: tid */
 	packetbuf *pkt;
-	char needpkt:1;
+	unsigned char needpkt:1;
 	connprops props;
 	char seq;
 	time_t wait;
@@ -74,7 +76,8 @@ typedef struct _connection {
 	char *errmsg;
 	int upstreamslen;
 	int *upstreams;
-	char goteof:1;
+	unsigned char goteof:1;
+	int results;
 	int upstream;
 } connection;
 
@@ -211,6 +214,7 @@ dispatch_addconnection(int sock, enum connstate istate)
 	connections[c].state = istate;
 	connections[c].upstreamslen = 0;
 	connections[c].upstreams = NULL;
+	connections[c].needpkt = 0;
 	connections[c].takenby = 0;  /* now dispatchers will pick this one up */
 	acceptedconnections++;
 
@@ -294,24 +298,31 @@ handle_packet(connection *conn)
 			switch (conn->pkt->buf[0]) {
 				case MYSQL_OK:
 					conn->state = READY;
+#ifdef DEBUG
+					printf("fd %d: connected to server [%d/%s]\n",
+							conn->sock, conn->props.connid,
+							conn->props.sver);
+#endif
 					break;
 				case MYSQL_ERR: {
 					char *err;
 					err = recv_err(conn->pkt, conn->props.capabilities);
-					fprintf(stderr, "[%d/%s] failed to login: %s\n",
-							conn->props.connid, conn->props.sver, err);
+					fprintf(stderr, "fd %d: [%d/%s] failed to login: %s\n",
+							conn->sock, conn->props.connid,
+							conn->props.sver, err);
 					free(err);
 					conn->state = FAIL;
 				}	break;
 				case MYSQL_EOF:
-					fprintf(stderr, "authswithrequest: %s, %s\n",
+					fprintf(stderr, "fd %d: authswithrequest: %s, %s\n",
+							conn->sock,
 							&conn->pkt->buf[1],
 							&conn->pkt->buf[1 + strlen((char *)&conn->pkt->buf[1]) + 1]);
 					conn->state = FAIL;
 					break;
 				default:
-					fprintf(stderr, "unhandled response after login: %X\n",
-							conn->pkt->buf[0]);
+					fprintf(stderr, "fd %d: unhandled response after "
+							"login: %X\n", conn->sock, conn->pkt->buf[0]);
 					conn->state = FAIL;
 					break;
 			}
@@ -337,9 +348,14 @@ handle_packet(connection *conn)
 							conn->upstreamslen
 							);
 					printf("%s\n", buf);
-					send_eof_str(conn->sock, conn->seq, buf);
+					send_eof_str(conn->sock, ++conn->seq, buf);
 				}	break;
 				case COM_QUERY: {
+#ifdef DEBUG
+					char *q = recv_comquery(conn->pkt);
+					printf("COM_QUERY: %s\n", q);
+					free(q);
+#endif
 					conn->needpkt = 1;
 					conn->state = QUERY;
 				}	break;
@@ -348,7 +364,7 @@ handle_packet(connection *conn)
 					conn->state = QUERY;
 					break;
 				default:
-					send_err(conn->sock, conn->seq, conn->props.capabilities,
+					send_err(conn->sock, ++conn->seq, conn->props.capabilities,
 							"PQ001", "Unhandled command");
 					break;
 			}
@@ -385,7 +401,7 @@ handle_packet(connection *conn)
 			break;
 	}
 
-	conn->seq = packetbuf_hdr_seq(conn->pkt) + 1;
+	conn->seq = packetbuf_hdr_seq(conn->pkt);
 }
 
 #define IDLE_DISCONNECT_TIME  (10 * 60)  /* 10 minutes */
@@ -496,6 +512,7 @@ dispatch_connection(connection *conn, dispatcher *self)
 						c->state = SENDHANDSHAKERESPV10;
 						break;
 					default:
+						ok = 0;
 						/* wait for the connections to commence */
 						break;
 				}
@@ -504,7 +521,7 @@ dispatch_connection(connection *conn, dispatcher *self)
 				conn->state = LOGINOK;
 		}	break;
 		case SENDHANDSHAKERESPV10:
-			send_handshakeresponsev41(conn->sock, conn->seq, &conn->props);
+			send_handshakeresponsev41(conn->sock, ++conn->seq, &conn->props);
 			conn->state = AFTERLOGIN;
 			break;
 		case LOGINOK: {
@@ -540,7 +557,7 @@ dispatch_connection(connection *conn, dispatcher *self)
 			ok.warnings = 0;
 			ok.status_info = info;
 			ok.session_state_info = NULL;
-			send_ok(conn->sock, conn->seq, conn->props.capabilities, &ok);
+			send_ok(conn->sock, ++conn->seq, conn->props.capabilities, &ok);
 			conn->state = INPUT;
 		}	break;
 		case QUERY:
@@ -566,7 +583,7 @@ dispatch_connection(connection *conn, dispatcher *self)
 				break;
 			} /* fall through for err in first branch of if-case */
 		case QUERY_ERR:
-			send_err(conn->sock, conn->seq, conn->props.capabilities,
+			send_err(conn->sock, ++conn->seq, conn->props.capabilities,
 					conn->sqlstate, conn->errmsg);
 			conn->state = INPUT;
 			break;
@@ -576,6 +593,7 @@ dispatch_connection(connection *conn, dispatcher *self)
 			int fail = -1;
 			int result = -1;
 
+			conn->results = 0;
 			for (i = 0; i >= 0 && i < conn->upstreamslen; i++) {
 				switch (connections[conn->upstreams[i]].state) {
 					case READY:
@@ -587,10 +605,14 @@ dispatch_connection(connection *conn, dispatcher *self)
 						break;
 					case RESULT:
 						result = i;
+						conn->results++;
+						assert(conn->results <= conn->upstreamslen);
+						break;
+					case HANDLED:
 						break;
 					default:
 						/* wait for the connections to commence */
-						i = -1;
+						i = -2;
 						break;
 				}
 			}
@@ -599,35 +621,36 @@ dispatch_connection(connection *conn, dispatcher *self)
 				/* send back working answer */
 				if (result > -1) {
 					connection *c = &connections[conn->upstreams[result]];
-					packetbuf_forward(c->pkt, conn->sock);
+					assert(c->needpkt);
+					packetbuf_send(c->pkt, ++conn->seq, conn->sock);
+					free(c->pkt);
+					c->pkt = NULL;
 					conn->upstream = result;
 					conn->goteof = 0;
 					conn->state = RESULTSET;
+					c->state = QUERY_SENT;
 				} else if (ready > -1) {
 					connection *c = &connections[conn->upstreams[ready]];
+					assert(c->needpkt);
 					packetbuf_forward(c->pkt, conn->sock);
 					conn->state = INPUT;
 				} else if (fail > -1) {
 					connection *c = &connections[conn->upstreams[fail]];
+					assert(c->needpkt);
 					packetbuf_forward(c->pkt, conn->sock);
 					conn->state = INPUT;
 				} else {
-					conn->state = QUERY_ERR;
-					conn->sqlstate = "PQ003";
-					conn->errmsg = "No answers from upstream servers ?!?";
-					break;
-				}
-
-				for (i = 0; i >= 0 && i < conn->upstreamslen; i++) {
-					connection *c = &connections[conn->upstreams[i]];
-					packetbuf_free(c->pkt);
-					c->pkt = NULL;
-					c->state = i != result ? READY : QUERY_SENT;
+					/* all HANDLED */
+					for (i = 0; i >= 0 && i < conn->upstreamslen; i++)
+						connections[conn->upstreams[i]].state = READY;
+					conn->state = INPUT;
 				}
 			}
 		}	break;
 		case RESULTSET: {
 			char done = 0;
+			mysql_ok *ok = NULL;
+			mysql_eof *eof = NULL;
 			connection *c = &connections[conn->upstreams[conn->upstream]];
 
 			/* Since resultsets consist of many packets, we need to keep
@@ -639,15 +662,10 @@ dispatch_connection(connection *conn, dispatcher *self)
 			 * finding the second EOF or an OK/ERR. */
 			switch (c->state) {
 				case READY: {
-					mysql_ok *ok = recv_ok(c->pkt, c->props.capabilities);
+					ok = recv_ok(c->pkt, c->props.capabilities);
 					/* we should only see OK if the client doesn't
 					 * expect EOFs, so we can assume being done here */
 					done = !(ok->status_flags & SERVER_MORE_RESULTS_EXISTS);
-					if (ok->status_info)
-						free(ok->status_info);
-					if (ok->session_state_info)
-						free(ok->session_state_info);
-					free(ok);
 				}	break;
 				case FAIL:
 					/* whether or not we look for EOF, if we see ERR
@@ -659,14 +677,12 @@ dispatch_connection(connection *conn, dispatcher *self)
 					 * seems to be violated in practise, so just accept
 					 * EOF if we see it and act as if we're in EOF mode */
 					if (conn->goteof) {
-						mysql_eof *eof =
-							recv_eof(c->pkt, c->props.capabilities);
+						eof = recv_eof(c->pkt, c->props.capabilities);
 
 						/* last EOF, so end of this thing, unless
 						 * status_flags indicates more is to come */
 						done = !(eof->status_flags &
 								SERVER_MORE_RESULTS_EXISTS);
-						free(eof);
 					} else {
 						conn->goteof = 1;
 					}
@@ -679,15 +695,38 @@ dispatch_connection(connection *conn, dispatcher *self)
 					break;
 			}
 			if (done >= 0) {
-				packetbuf_forward(c->pkt, conn->sock);
+				printf("done: %d, results: %d\n", done, conn->results);
+				if (done && conn->results > 1) {
+					if (c->state == READY) {
+						ok->status_flags |= SERVER_MORE_RESULTS_EXISTS;
+						send_ok(conn->sock, ++conn->seq,
+								c->props.capabilities, ok);
+					}
+					if (c->state == RESULT_EOF) {
+						eof->status_flags |= SERVER_MORE_RESULTS_EXISTS;
+						send_eof(conn->sock, ++conn->seq,
+								c->props.capabilities, eof);
+					}
+				} else {
+					packetbuf_send(c->pkt, ++conn->seq, conn->sock);
+				}
 				packetbuf_free(c->pkt);
 				c->pkt = NULL;
 				if (done) {
-					c->state = READY;
-					conn->state = INPUT;
+					c->state = HANDLED;
+					conn->state = QUERY_FORWARDED;
 				} else {
 					c->state = QUERY_SENT;
 				}
+				if (ok != NULL) {
+					if (ok->status_info)
+						free(ok->status_info);
+					if (ok->session_state_info)
+						free(ok->session_state_info);
+					free(ok);
+				}
+				if (eof != NULL)
+					free(eof);
 			}
 		}	break;
 		case QUIT:
@@ -704,6 +743,7 @@ dispatch_connection(connection *conn, dispatcher *self)
 		case READY:
 		case RESULT:
 		case RESULT_EOF:
+		case HANDLED:
 		case FAIL:
 			break;
 		default:
