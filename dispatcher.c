@@ -68,6 +68,7 @@ typedef struct _connection {
 	char takenby;   /* -2: being setup, -1: free, 0: not taken, >0: tid */
 	packetbuf *pkt;
 	unsigned char needpkt:1;
+	unsigned char sendallresults:1;
 	connprops props;
 	char seq;
 	time_t wait;
@@ -77,6 +78,7 @@ typedef struct _connection {
 	int upstreamslen;
 	int *upstreams;
 	unsigned char goteof:1;
+	unsigned char resultsent:1;
 	int results;
 	int upstream;
 } connection;
@@ -215,6 +217,7 @@ dispatch_addconnection(int sock, enum connstate istate)
 	connections[c].upstreamslen = 0;
 	connections[c].upstreams = NULL;
 	connections[c].needpkt = 0;
+	connections[c].sendallresults = 0;
 	connections[c].takenby = 0;  /* now dispatchers will pick this one up */
 	acceptedconnections++;
 
@@ -329,6 +332,18 @@ handle_packet(connection *conn)
 			break;
 		case INPUT:
 			switch (conn->pkt->buf[0]) {
+				case COM_PING: {
+					mysql_ok ok;
+
+					ok.affrows = 0;
+					ok.lastid = 0;
+					ok.status_flags = SERVER_STATUS_AUTOCOMMIT;
+					ok.warnings = 0;
+					ok.status_info = "I'm still here!";
+					ok.session_state_info = NULL;
+					send_ok(conn->sock, ++conn->seq,
+							conn->props.capabilities, &ok);
+				} break;
 				case COM_QUIT:
 					conn->state = QUIT;
 					break;
@@ -350,6 +365,45 @@ handle_packet(connection *conn)
 					printf("%s\n", buf);
 					send_eof_str(conn->sock, ++conn->seq, buf);
 				}	break;
+				case COM_REFRESH:
+					if (conn->pkt->buf[1] == 0x40) {
+						/* RESET SLAVE: enable returning all results */
+						if (conn->props.capabilities & CLIENT_MULTI_STATEMENTS)
+						{
+							mysql_ok ok;
+
+							conn->sendallresults = 1;
+							ok.affrows = 0;
+							ok.lastid = 0;
+							ok.status_flags = SERVER_STATUS_AUTOCOMMIT;
+							ok.warnings = 0;
+							ok.status_info = "multi-statements enabled";
+							ok.session_state_info = NULL;
+							send_ok(conn->sock, ++conn->seq,
+									conn->props.capabilities, &ok);
+						} else {
+							/* client doesn't support this */
+							send_err(conn->sock, ++conn->seq,
+									conn->props.capabilities,
+									"PQ0013", "Client does not support "
+									"multi-statements");
+						}
+						break;
+					} else if (conn->pkt->buf[1] == 0x80) {
+						/* RESET MASTER: only return first result (default) */
+						mysql_ok ok;
+
+						conn->sendallresults = 0;
+						ok.affrows = 0;
+						ok.lastid = 0;
+						ok.status_flags = SERVER_STATUS_AUTOCOMMIT;
+						ok.warnings = 0;
+						ok.status_info = "multi-statements disabled";
+						ok.session_state_info = NULL;
+						send_ok(conn->sock, ++conn->seq,
+								conn->props.capabilities, &ok);
+						break;
+					} /* fall through */
 				case COM_QUERY: {
 #ifdef DEBUG
 					char *q = recv_comquery(conn->pkt);
@@ -553,7 +607,7 @@ dispatch_connection(connection *conn, dispatcher *self)
 					ready, total);
 			ok.affrows = 0;
 			ok.lastid = 0;
-			ok.status_flags = 0x0002;  /* auto_commit */
+			ok.status_flags = SERVER_STATUS_AUTOCOMMIT;
 			ok.warnings = 0;
 			ok.status_info = info;
 			ok.session_state_info = NULL;
@@ -579,6 +633,7 @@ dispatch_connection(connection *conn, dispatcher *self)
 				}
 				packetbuf_free(conn->pkt);
 				conn->pkt = NULL;
+				conn->resultsent = 0;
 				conn->state = QUERY_FORWARDED;
 				break;
 			} /* fall through for err in first branch of if-case */
@@ -622,7 +677,8 @@ dispatch_connection(connection *conn, dispatcher *self)
 				if (result > -1) {
 					connection *c = &connections[conn->upstreams[result]];
 					assert(c->needpkt);
-					packetbuf_send(c->pkt, ++conn->seq, conn->sock);
+					if (conn->sendallresults || !conn->resultsent)
+						packetbuf_send(c->pkt, ++conn->seq, conn->sock);
 					free(c->pkt);
 					c->pkt = NULL;
 					conn->upstream = result;
@@ -632,13 +688,15 @@ dispatch_connection(connection *conn, dispatcher *self)
 				} else if (ready > -1) {
 					connection *c = &connections[conn->upstreams[ready]];
 					assert(c->needpkt);
-					packetbuf_forward(c->pkt, conn->sock);
-					conn->state = INPUT;
+					if (!conn->resultsent)
+						packetbuf_forward(c->pkt, conn->sock);
+					c->state = HANDLED;
 				} else if (fail > -1) {
 					connection *c = &connections[conn->upstreams[fail]];
 					assert(c->needpkt);
-					packetbuf_forward(c->pkt, conn->sock);
-					conn->state = INPUT;
+					if (!conn->resultsent)
+						packetbuf_forward(c->pkt, conn->sock);
+					c->state = HANDLED;
 				} else {
 					/* all HANDLED */
 					for (i = 0; i >= 0 && i < conn->upstreamslen; i++)
@@ -696,7 +754,7 @@ dispatch_connection(connection *conn, dispatcher *self)
 			}
 			if (done >= 0) {
 				printf("done: %d, results: %d\n", done, conn->results);
-				if (done && conn->results > 1) {
+				if (conn->sendallresults && done && conn->results > 1) {
 					if (c->state == READY) {
 						ok->status_flags |= SERVER_MORE_RESULTS_EXISTS;
 						send_ok(conn->sock, ++conn->seq,
@@ -707,13 +765,14 @@ dispatch_connection(connection *conn, dispatcher *self)
 						send_eof(conn->sock, ++conn->seq,
 								c->props.capabilities, eof);
 					}
-				} else {
+				} else if (conn->sendallresults || !conn->resultsent) {
 					packetbuf_send(c->pkt, ++conn->seq, conn->sock);
 				}
 				packetbuf_free(c->pkt);
 				c->pkt = NULL;
 				if (done) {
 					c->state = HANDLED;
+					conn->resultsent = 1;
 					conn->state = QUERY_FORWARDED;
 				} else {
 					c->state = QUERY_SENT;

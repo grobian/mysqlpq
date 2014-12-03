@@ -22,9 +22,10 @@
 #define COM_QUIT       0x01
 #define COM_INIT_DB    0x02
 #define COM_QUERY      0x03
+#define COM_REFRESH    0x07
+#define COM_STATISTICS 0x09
 #define COM_CONNECT    0x0b
 #define COM_PING       0x0e
-#define COM_STATISTICS 0x09
 
 #define MYSQL_OK       0x00
 #define MYSQL_ERR      0xff
