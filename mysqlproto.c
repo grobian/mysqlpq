@@ -915,6 +915,14 @@ send_eof_str(int fd, char seq, char *msg)
 }
 
 char *
+recv_eof_str(packetbuf *buf)
+{
+	shift_int1(buf);  /* COM_INIT_DB */
+
+	return shift_fixed_string(buf, buf->len - 1);
+}
+
+char *
 recv_err(packetbuf *buf, int capabilities)
 {
 	short errcode;

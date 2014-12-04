@@ -368,45 +368,6 @@ handle_packet(connection *conn)
 					printf("%s\n", buf);
 					send_eof_str(conn->sock, ++conn->seq, buf);
 				}	break;
-				case COM_REFRESH:
-					if (conn->pkt->buf[1] == 0x40) {
-						/* RESET SLAVE: enable returning all results */
-						if (conn->props.capabilities & CLIENT_MULTI_STATEMENTS)
-						{
-							mysql_ok ok;
-
-							conn->sendallresults = 1;
-							ok.affrows = 0;
-							ok.lastid = 0;
-							ok.status_flags = SERVER_STATUS_AUTOCOMMIT;
-							ok.warnings = 0;
-							ok.status_info = "multi-statements enabled";
-							ok.session_state_info = NULL;
-							send_ok(conn->sock, ++conn->seq,
-									conn->props.capabilities, &ok);
-						} else {
-							/* client doesn't support this */
-							send_err(conn->sock, ++conn->seq,
-									conn->props.capabilities,
-									"PQ0013", "Client does not support "
-									"multi-statements");
-						}
-						break;
-					} else if (conn->pkt->buf[1] == 0x80) {
-						/* RESET MASTER: only return first result (default) */
-						mysql_ok ok;
-
-						conn->sendallresults = 0;
-						ok.affrows = 0;
-						ok.lastid = 0;
-						ok.status_flags = SERVER_STATUS_AUTOCOMMIT;
-						ok.warnings = 0;
-						ok.status_info = "multi-statements disabled";
-						ok.session_state_info = NULL;
-						send_ok(conn->sock, ++conn->seq,
-								conn->props.capabilities, &ok);
-						break;
-					} /* fall through */
 				case COM_QUERY: {
 #ifdef DEBUG
 					char *q = recv_comquery(conn->pkt);
@@ -416,10 +377,70 @@ handle_packet(connection *conn)
 					conn->needpkt = 1;
 					conn->state = QUERY;
 				}	break;
-				case COM_INIT_DB:
+				case COM_INIT_DB: {
+#ifdef DEBUG
+					char *feature = recv_eof_str(conn->pkt);
+					printf("COM_INIT_DB: %s\n", feature);
+#endif
+					if (conn->pkt->len > 9 &&
+							strncmp(&conn->pkt->buf[1], "feature:", 8) == 0)
+					{
+#ifndef DEBUG
+						char *feature = recv_eof_str(conn->pkt);
+#endif
+
+						if (strcmp(feature + 8, "allresults") == 0) {
+							/* enable returning all results */
+							if (conn->props.capabilities &
+									CLIENT_MULTI_STATEMENTS)
+							{
+								mysql_ok ok;
+
+								conn->sendallresults = 1;
+								ok.affrows = 0;
+								ok.lastid = 0;
+								ok.status_flags = SERVER_STATUS_AUTOCOMMIT;
+								ok.warnings = 0;
+								ok.status_info = "multi-statements enabled";
+								ok.session_state_info = NULL;
+								send_ok(conn->sock, ++conn->seq,
+										conn->props.capabilities, &ok);
+							} else {
+								/* client doesn't support this */
+								send_err(conn->sock, ++conn->seq,
+										conn->props.capabilities,
+										"PQ003", "Client does not support "
+										"multi-statements");
+							}
+						} else if (strcmp(feature + 8, "firstresult") == 0) {
+							/* only return first result (default) */
+							mysql_ok ok;
+
+							conn->sendallresults = 0;
+							ok.affrows = 0;
+							ok.lastid = 0;
+							ok.status_flags = SERVER_STATUS_AUTOCOMMIT;
+							ok.warnings = 0;
+							ok.status_info = "multi-statements disabled";
+							ok.session_state_info = NULL;
+							send_ok(conn->sock, ++conn->seq,
+									conn->props.capabilities, &ok);
+						} else {
+							send_err(conn->sock, ++conn->seq,
+									conn->props.capabilities,
+									"PQ004", "Unknown feature");
+						}
+
+						free(feature);
+						break;
+					}
+#ifdef DEBUG
+					free(feature);
+#endif
+
 					conn->needpkt = 1;
 					conn->state = QUERY;
-					break;
+				}	break;
 				default:
 					send_err(conn->sock, ++conn->seq, conn->props.capabilities,
 							"PQ001", "Unhandled command");
