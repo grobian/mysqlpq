@@ -295,6 +295,7 @@ handle_packet(connection *conn)
 			break;
 		case RECVHANDSHAKERESPV10:
 			recv_handshakeresponsev41(conn->pkt, &conn->props);
+			conn->seq++;
 			conn->state = WAITUPSTREAMCONNS;
 			break;
 		case AFTERLOGIN:
@@ -331,6 +332,8 @@ handle_packet(connection *conn)
 			}
 			break;
 		case INPUT:
+			conn->seq = packetbuf_hdr_seq(conn->pkt);
+
 			switch (conn->pkt->buf[0]) {
 				case COM_PING: {
 					mysql_ok ok;
@@ -454,8 +457,6 @@ handle_packet(connection *conn)
 					conn->state);
 			break;
 	}
-
-	conn->seq = packetbuf_hdr_seq(conn->pkt);
 }
 
 #define IDLE_DISCONNECT_TIME  (10 * 60)  /* 10 minutes */
