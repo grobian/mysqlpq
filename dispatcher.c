@@ -217,7 +217,7 @@ dispatch_addconnection(int sock, enum connstate istate)
 	connections[c].upstreamslen = 0;
 	connections[c].upstreams = NULL;
 	connections[c].needpkt = 0;
-	connections[c].sendallresults = 0;
+	connections[c].sendallresults = 0;  /* login process of client breaks */
 	connections[c].takenby = 0;  /* now dispatchers will pick this one up */
 	acceptedconnections++;
 
@@ -543,14 +543,13 @@ dispatch_connection(connection *conn, dispatcher *self)
 			break;
 		case WAITUPSTREAMCONNS: {
 			int i;
-			char ok = 0;
+			char ok = 1;
 			
 			for (i = 0; i >= 0 && i < conn->upstreamslen; i++) {
 				connection *c = &connections[conn->upstreams[i]];
 				switch (c->state) {
 					case READY:
 					case FAIL:
-						ok = 1;
 						break;
 					case HANDSHAKEV10_RECEIVED:
 						c->props.capabilities &= conn->props.capabilities;
@@ -565,6 +564,7 @@ dispatch_connection(connection *conn, dispatcher *self)
 							NULL : strdup(conn->props.dbname);
 						c->props.maxpktsize = conn->props.maxpktsize;
 						c->state = SENDHANDSHAKERESPV10;
+						ok = 0;
 						break;
 					default:
 						ok = 0;
