@@ -839,6 +839,15 @@ dispatch_connection(connection *conn, dispatcher *self)
 			closedconnections++;
 			close(conn->sock);
 
+#ifdef DEBUG
+			printf("fd %d: closing\n", conn->sock);
+#endif
+			/* close upstream connections also */
+			while (conn->upstreamslen > 0) {
+				conn->upstreamslen--;
+				connections[conn->upstreams[conn->upstreamslen]].state = QUIT;
+			}
+
 			/* flag this connection as no longer in use */
 			conn->takenby = -1;
 
@@ -868,7 +877,11 @@ dispatch_connection(connection *conn, dispatcher *self)
 					conn->pkt = NULL;
 				}
 			} else {
-				printf("got insufficient data\n");
+#ifdef DEBUG
+				fprintf(stderr, "fd %d: failed to read EOF or error: ",
+						conn->sock, strerror(errno));
+				conn->state = QUIT;
+#endif
 			}
 			break;
 	}
