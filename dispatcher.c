@@ -366,7 +366,9 @@ handle_packet(connection *conn)
 							closedconnections,
 							conn->upstreamslen
 							);
-					printf("%s\n", buf);
+#ifdef DEBUG
+					printf("COM_STATISTICS: %s\n", buf);
+#endif
 					send_eof_str(conn->sock, ++conn->seq, buf);
 				}	break;
 				case COM_QUERY: {
@@ -707,7 +709,7 @@ dispatch_connection(connection *conn, dispatcher *self)
 							conn->resultcols != recv_field_count(c->pkt))
 					{
 						conn->sendallresults = 0;
-						fprintf(stdout, "fd %d: disabling feature allresults: "
+						fprintf(stderr, "fd %d: disabling feature allresults: "
 								"got two results with different column "
 								"counts\n", conn->sock);
 					}
@@ -791,8 +793,10 @@ dispatch_connection(connection *conn, dispatcher *self)
 					break;
 			}
 			if (done >= 0) {
+#ifdef DEBUG
 				printf("done: %d, cols: %lld, goteof: %d, results: %d\n",
 						done, c->resultcols, c->goteof, conn->results);
+#endif
 
 				/*
 				 * cols
