@@ -941,3 +941,9 @@ recv_err(packetbuf *buf, int capabilities)
 
 	return errmsg;
 }
+
+long long int
+recv_field_count(packetbuf *buf)
+{
+	return shift_length_int(buf);
+}

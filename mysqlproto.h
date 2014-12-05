@@ -168,5 +168,6 @@ void send_eof_str(int fd, char seq, char *msg);
 char *recv_eof_str(packetbuf *buf);
 void send_err(int fd, char seq, int capabilities, char *code, char *msg);
 char *recv_err(packetbuf *buf, int capabilities);
+long long int recv_field_count(packetbuf *buf);
 
 #endif

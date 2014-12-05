@@ -70,7 +70,7 @@ typedef struct _connection {
 	unsigned char needpkt:1;
 	unsigned char sendallresults:1;
 	connprops props;
-	char seq;
+	unsigned char seq;
 	time_t wait;
 	enum connstate state;
 	char *sqlstate;
@@ -79,6 +79,7 @@ typedef struct _connection {
 	int *upstreams;
 	unsigned char goteof:1;
 	unsigned char resultsent:1;
+	long long int resultcols;
 	int results;
 	int upstream;
 } connection;
@@ -699,14 +700,24 @@ dispatch_connection(connection *conn, dispatcher *self)
 				if (result > -1) {
 					connection *c = &connections[conn->upstreams[result]];
 					assert(c->needpkt);
-					if (conn->sendallresults || !conn->resultsent)
+					if (!conn->resultsent) {
+						conn->resultcols = recv_field_count(c->pkt);
 						packetbuf_send(c->pkt, ++conn->seq, conn->sock);
+					} else if (conn->sendallresults &&
+							conn->resultcols != recv_field_count(c->pkt))
+					{
+						conn->sendallresults = 0;
+						fprintf(stdout, "fd %d: disabling feature allresults: "
+								"got two results with different column "
+								"counts\n", conn->sock);
+					}
 					free(c->pkt);
 					c->pkt = NULL;
-					conn->upstream = result;
-					conn->goteof = 0;
-					conn->state = RESULTSET;
+					c->goteof = 0;
+					c->resultcols = conn->resultcols;
 					c->state = QUERY_SENT;
+					conn->upstream = result;
+					conn->state = RESULTSET;
 				} else if (ready > -1) {
 					connection *c = &connections[conn->upstreams[ready]];
 					assert(c->needpkt);
@@ -756,7 +767,7 @@ dispatch_connection(connection *conn, dispatcher *self)
 					/* the case where we've set CLIENT_DEPRECATE_EOF
 					 * seems to be violated in practise, so just accept
 					 * EOF if we see it and act as if we're in EOF mode */
-					if (conn->goteof) {
+					if (c->goteof) {
 						eof = recv_eof(c->pkt, c->props.capabilities);
 
 						/* last EOF, so end of this thing, unless
@@ -764,10 +775,15 @@ dispatch_connection(connection *conn, dispatcher *self)
 						done = !(eof->status_flags &
 								SERVER_MORE_RESULTS_EXISTS);
 					} else {
-						conn->goteof = 1;
+						c->goteof = 1;
 					}
 					break;
 				case RESULT:
+					/* calculate when the column names have been seen */
+					if (c->resultcols == 0)
+						c->goteof = 1;
+					if (!c->goteof)
+						c->resultcols--;
 					break;
 				default:
 					/* wait for the next answer */
@@ -775,21 +791,25 @@ dispatch_connection(connection *conn, dispatcher *self)
 					break;
 			}
 			if (done >= 0) {
-				printf("done: %d, results: %d\n", done, conn->results);
-				if (conn->sendallresults && done && conn->results > 1) {
-					if (c->state == READY) {
-						ok->status_flags |= SERVER_MORE_RESULTS_EXISTS;
-						send_ok(conn->sock, ++conn->seq,
-								c->props.capabilities, ok);
-					}
-					if (c->state == RESULT_EOF) {
-						eof->status_flags |= SERVER_MORE_RESULTS_EXISTS;
-						send_eof(conn->sock, ++conn->seq,
-								c->props.capabilities, eof);
-					}
-				} else if (conn->sendallresults || !conn->resultsent) {
+				printf("done: %d, cols: %lld, goteof: %d, results: %d\n",
+						done, c->resultcols, c->goteof, conn->results);
+
+				/*
+				 * cols
+				 * fields
+				 *  eof      conn->goteof == 1
+				 * rows
+				 *  eof|ok   done == 1
+				 */
+				if (conn->sendallresults) {
+					if (!done && (!conn->resultsent ||
+								(conn->resultsent && c->goteof)) ||
+							done && conn->results == 1)
+						packetbuf_send(c->pkt, ++conn->seq, conn->sock);
+				} else if (!conn->resultsent) {
 					packetbuf_send(c->pkt, ++conn->seq, conn->sock);
 				}
+
 				packetbuf_free(c->pkt);
 				c->pkt = NULL;
 				if (done) {
