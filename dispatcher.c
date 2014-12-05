@@ -384,7 +384,7 @@ handle_packet(connection *conn)
 					printf("COM_INIT_DB: %s\n", feature);
 #endif
 					if (conn->pkt->len > 9 &&
-							strncmp(&conn->pkt->buf[1], "feature:", 8) == 0)
+							strncmp((char *)&conn->pkt->buf[1], "feature:", 8) == 0)
 					{
 #ifndef DEBUG
 						char *feature = recv_eof_str(conn->pkt);
@@ -802,9 +802,9 @@ dispatch_connection(connection *conn, dispatcher *self)
 				 *  eof|ok   done == 1
 				 */
 				if (conn->sendallresults) {
-					if (!done && (!conn->resultsent ||
-								(conn->resultsent && c->goteof)) ||
-							done && conn->results == 1)
+					if ((!done && (!conn->resultsent ||
+								(conn->resultsent && c->goteof))) ||
+							(done && conn->results == 1))
 						packetbuf_send(c->pkt, ++conn->seq, conn->sock);
 				} else if (!conn->resultsent) {
 					packetbuf_send(c->pkt, ++conn->seq, conn->sock);
