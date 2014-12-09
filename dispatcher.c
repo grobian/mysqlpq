@@ -742,8 +742,6 @@ dispatch_connection(connection *conn, dispatcher *self)
 		}	break;
 		case RESULTSET: {
 			char done = 0;
-			mysql_ok *ok = NULL;
-			mysql_eof *eof = NULL;
 			connection *c = &connections[conn->upstreams[conn->upstream]];
 
 			/* Since resultsets consist of many packets, we need to keep
@@ -755,10 +753,16 @@ dispatch_connection(connection *conn, dispatcher *self)
 			 * finding the second EOF or an OK/ERR. */
 			switch (c->state) {
 				case READY: {
-					ok = recv_ok(c->pkt, c->props.capabilities);
+					mysql_ok *ok = recv_ok(c->pkt, c->props.capabilities);
 					/* we should only see OK if the client doesn't
 					 * expect EOFs, so we can assume being done here */
 					done = !(ok->status_flags & SERVER_MORE_RESULTS_EXISTS);
+
+					if (ok->status_info)
+						free(ok->status_info);
+					if (ok->session_state_info)
+						free(ok->session_state_info);
+					free(ok);
 				}	break;
 				case FAIL:
 					/* whether or not we look for EOF, if we see ERR
@@ -770,12 +774,15 @@ dispatch_connection(connection *conn, dispatcher *self)
 					 * seems to be violated in practise, so just accept
 					 * EOF if we see it and act as if we're in EOF mode */
 					if (c->goteof) {
-						eof = recv_eof(c->pkt, c->props.capabilities);
+						mysql_eof *eof =
+							recv_eof(c->pkt, c->props.capabilities);
 
 						/* last EOF, so end of this thing, unless
 						 * status_flags indicates more is to come */
 						done = !(eof->status_flags &
 								SERVER_MORE_RESULTS_EXISTS);
+
+						free(eof);
 					} else {
 						c->goteof = 1;
 					}
@@ -823,15 +830,6 @@ dispatch_connection(connection *conn, dispatcher *self)
 				} else {
 					c->state = QUERY_SENT;
 				}
-				if (ok != NULL) {
-					if (ok->status_info)
-						free(ok->status_info);
-					if (ok->session_state_info)
-						free(ok->session_state_info);
-					free(ok);
-				}
-				if (eof != NULL)
-					free(eof);
 			}
 		}	break;
 		case QUIT:
