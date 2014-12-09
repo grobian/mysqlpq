@@ -858,15 +858,9 @@ dispatch_connection(connection *conn, dispatcher *self)
 		case HANDLED:
 		case FAIL:
 			break;
-		default:
-			if (conn->pkt == NULL)
-				conn->pkt = packetbuf_recv_hdr(conn->sock);
-			if (conn->pkt == NULL) {
-				ret = 0;
-				break;
-			}
-			/* FIXME handle errors */
-			if (packetbuf_recv_data(conn->pkt, conn->sock) > 0) {
+		default: {
+			int len;
+			if ((len = packetbuf_recv_data(&conn->pkt, conn->sock)) > 0) {
 				/* packet done, deal with it */
 				conn->needpkt = 0;
 				handle_packet(conn);
@@ -874,14 +868,18 @@ dispatch_connection(connection *conn, dispatcher *self)
 					packetbuf_free(conn->pkt);
 					conn->pkt = NULL;
 				}
-			} else {
+			} else if (len == -1) {
+				if (conn->pkt == NULL)
+					fprintf(stderr, "out of memory allocating packet buffer!\n");
 #ifdef DEBUG
-				fprintf(stderr, "fd %d: failed to read EOF or error: ",
-						conn->sock, strerror(errno));
-				conn->state = QUIT;
+				fprintf(stderr, "fd %d: failed to read(%d): EOF or error: %s\n",
+						conn->sock, len, strerror(errno));
 #endif
+				conn->state = QUIT;
+			} else {
+				ret = len != -2;
 			}
-			break;
+		}	break;
 	}
 
 	gettimeofday(&stop, NULL);

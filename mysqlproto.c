@@ -21,6 +21,7 @@
 #include <errno.h>
 #include <sys/socket.h>
 #include <openssl/sha.h>
+#include <assert.h>
 
 #include "mysqlpq.h"
 #include "mysqlproto.h"
@@ -189,53 +190,53 @@ packetbuf_forward(packetbuf *buf, int fd)
 	return write(fd, hdr, sizeof(mysql_packet_hdr) + len);
 }
 
-packetbuf *
-packetbuf_recv_hdr(int fd)
+/* call this function as long as it returns 0 or -2, if -1 an error
+ * occurred, else it is the size of the completed packet */
+int
+packetbuf_recv_data(packetbuf **ret, int fd)
 {
-	packetbuf *ret = packetbuf_get();
-	mysql_packet_hdr *hdr = (void *)(ret->buf - sizeof(mysql_packet_hdr));
+	ssize_t readlen;
+	int wantlen;
+	packetbuf *buf;
 
-	if (read(fd, hdr, sizeof(mysql_packet_hdr)) != sizeof(mysql_packet_hdr)) {
-		packetbuf_free(ret);
-		return NULL;
+	if (*ret == NULL) {
+		buf = *ret = packetbuf_get();
+		if (buf == NULL)
+			return -1;
+		buf->len = - sizeof(mysql_packet_hdr);
+	} else {
+		buf = *ret;
 	}
 
-#if DEBUG > 1
-	printf("fd %d: received header, len: %d, seq: %d\n", fd,
-			packetbuf_hdr_len(ret), hdr->seq);
-#endif
+	if (buf->len < 0) {
+		wantlen = - buf->len;
+		packetbuf_realloc(buf, sizeof(mysql_packet_hdr));
+	} else {
+		wantlen = packetbuf_hdr_len(buf);
+		packetbuf_realloc(buf, wantlen);
+		wantlen -= buf->len;
+	}
 
-	return ret;
-}
-
-/* call this function as long as it returns 0, if -1 an error occurred,
- * else its the size of the completed packet */
-int
-packetbuf_recv_data(packetbuf *buf, int fd)
-{
-	int wantlen = packetbuf_hdr_len(buf);
-	ssize_t readlen;
-
-	packetbuf_realloc(buf, wantlen);
-
-	wantlen -= buf->len;
+	assert(wantlen > 0);
 	readlen = read(fd, buf->buf + buf->len, wantlen);
 
 	if (readlen == wantlen) {
 #ifdef DEBUG
-	printf("fd %d: received packet, len: %d, seq: %d, *buf: 0x%02x\n",
-			fd, wantlen, packetbuf_hdr_seq(buf), *buf->buf);
+		if (buf->len > 0)
+			printf("fd %d: received packet, len: %d, seq: %d, *buf: 0x%02x\n",
+					fd, wantlen, packetbuf_hdr_seq(buf), *buf->buf);
 #endif
 		return buf->len += readlen;
-	} else if ((readlen == -1 &&
+	} else if (readlen == -1 &&
 			(errno == EINTR ||
 			 errno == EAGAIN ||
-			 errno == EWOULDBLOCK)) ||
-			readlen < wantlen)
+			 errno == EWOULDBLOCK))
 	{
+		/* no data available */
+		return -2;
+	} else if (readlen < wantlen) {
 		/* partial data */
-		if (readlen > 0)
-			buf->len += readlen;
+		buf->len += readlen;
 		return 0;
 	} else {
 		/* unexpected EOF or error */

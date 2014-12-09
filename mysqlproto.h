@@ -112,7 +112,7 @@ typedef struct {
 	unsigned char *buf;
 	unsigned char *pos;
 	size_t size;
-	size_t len;
+	ssize_t len;
 } packetbuf;
 
 typedef struct {
@@ -145,8 +145,7 @@ typedef struct {
 	short warnings;
 } mysql_eof;
 
-packetbuf *packetbuf_recv_hdr(int fd);
-int packetbuf_recv_data(packetbuf *buf, int fd);
+int packetbuf_recv_data(packetbuf **buf, int fd);
 int packetbuf_send(packetbuf *buf, char seq, int fd);
 int packetbuf_forward(packetbuf *buf, int fd);
 void packetbuf_free(packetbuf *buf);
