@@ -725,12 +725,16 @@ dispatch_connection(connection *conn, dispatcher *self)
 					assert(c->needpkt);
 					if (!conn->resultsent)
 						packetbuf_forward(c->pkt, conn->sock);
+					free(c->pkt);
+					c->pkt = NULL;
 					c->state = HANDLED;
 				} else if (fail > -1) {
 					connection *c = &connections[conn->upstreams[fail]];
 					assert(c->needpkt);
 					if (!conn->resultsent)
 						packetbuf_forward(c->pkt, conn->sock);
+					free(c->pkt);
+					c->pkt = NULL;
 					c->state = HANDLED;
 				} else {
 					/* all HANDLED */
