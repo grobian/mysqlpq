@@ -225,64 +225,6 @@ dispatch_addconnection(int sock, enum connstate istate)
 	return c;
 }
 
-#if 0
-static inline int
-read_input(connection *conn)
-{
-	int len = -2;
-	/* try to read more data, if that succeeds, or we still have data
-	 * left in the buffer, try to process the buffer */
-	if (
-			(!conn->needmore && conn->buflen > 0) || 
-			(len = read(conn->sock,
-						conn->buf + conn->buflen, 
-						(sizeof(conn->buf) - 1) - conn->buflen)) > 0
-	   )
-	{
-		if (len > 0)
-			conn->buflen += len;
-
-		/* TODO: do something */
-	}
-	if (len == -1 && (errno == EINTR ||
-				errno == EAGAIN ||
-				errno == EWOULDBLOCK))
-	{
-		/* nothing available/no work done */
-		if (conn->wait == 0) {
-			conn->wait = time(NULL);
-			conn->takenby = 0;
-			return 0;
-		} else if (time(NULL) - conn->wait > IDLE_DISCONNECT_TIME) {
-			/* force close connection below */
-			len = 0;
-		} else {
-			conn->takenby = 0;
-			return 0;
-		}
-	}
-	if (len == -1 || len == 0) {  /* error + EOF */
-		/* we also disconnect the client in this case if our reading
-		 * buffer is full, but we still need more (read returns 0 if the
-		 * size argument is 0) -> this is good, because we can't do much
-		 * with such client */
-
-		closedconnections++;
-		close(conn->sock);
-
-		/* flag this connection as no longer in use */
-		conn->takenby = -1;
-
-		return 0;
-	}
-
-	/* "release" this connection again */
-	conn->takenby = 0;
-
-	return 1;
-}
-#endif
-
 static void
 handle_packet(connection *conn)
 {
@@ -483,7 +425,6 @@ handle_packet(connection *conn)
 	}
 }
 
-#define IDLE_DISCONNECT_TIME  (10 * 60)  /* 10 minutes */
 /**
  * Look at conn and see if works needs to be done.  If so, do it.
  */
