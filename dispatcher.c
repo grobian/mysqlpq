@@ -431,7 +431,7 @@ handle_packet(connection *conn)
 static int
 dispatch_connection(connection *conn, dispatcher *self)
 {
-	int ret = 1;
+	int ret = 0;
 	struct timeval start, stop;
 
 	gettimeofday(&start, NULL);
@@ -505,6 +505,7 @@ dispatch_connection(connection *conn, dispatcher *self)
 				}
 			}
 			conn->state = RECVHANDSHAKERESPV10;
+			ret = 1;
 			break;
 		case WAITUPSTREAMCONNS: {
 			int i;
@@ -537,12 +538,15 @@ dispatch_connection(connection *conn, dispatcher *self)
 						break;
 				}
 			}
-			if (ok == 1)
+			if (ok == 1) {
 				conn->state = LOGINOK;
+				ret = 1;
+			}
 		}	break;
 		case SENDHANDSHAKERESPV10:
 			send_handshakeresponsev41(conn->sock, ++conn->seq, &conn->props);
 			conn->state = AFTERLOGIN;
+			ret = 1;
 			break;
 		case LOGINOK: {
 			int i;
@@ -579,6 +583,7 @@ dispatch_connection(connection *conn, dispatcher *self)
 			ok.session_state_info = NULL;
 			send_ok(conn->sock, ++conn->seq, conn->props.capabilities, &ok);
 			conn->state = INPUT;
+			ret = 1;
 		}	break;
 		case QUERY:
 			if (conn->upstreams == NULL || conn->upstreamslen == 0) {
@@ -601,12 +606,14 @@ dispatch_connection(connection *conn, dispatcher *self)
 				conn->pkt = NULL;
 				conn->resultsent = 0;
 				conn->state = QUERY_FORWARDED;
+				ret = 1;
 				break;
 			} /* fall through for err in first branch of if-case */
 		case QUERY_ERR:
 			send_err(conn->sock, ++conn->seq, conn->props.capabilities,
 					conn->sqlstate, conn->errmsg);
 			conn->state = INPUT;
+			ret = 1;
 			break;
 		case QUERY_FORWARDED: {
 			int i;
@@ -683,6 +690,8 @@ dispatch_connection(connection *conn, dispatcher *self)
 						connections[conn->upstreams[i]].state = READY;
 					conn->state = INPUT;
 				}
+
+				ret = 1;
 			}
 		}	break;
 		case RESULTSET: {
@@ -775,6 +784,8 @@ dispatch_connection(connection *conn, dispatcher *self)
 				} else {
 					c->state = QUERY_SENT;
 				}
+
+				ret = 1;
 			}
 		}	break;
 		case QUIT:
@@ -796,7 +807,7 @@ dispatch_connection(connection *conn, dispatcher *self)
 
 			gettimeofday(&stop, NULL);
 			self->ticks += timediff(start, stop);
-			return 0;
+			return 0;  /* unlikely new stuff has to be done for this conn */
 		case READY:
 		case RESULT:
 		case RESULT_EOF:
@@ -813,6 +824,7 @@ dispatch_connection(connection *conn, dispatcher *self)
 					packetbuf_free(conn->pkt);
 					conn->pkt = NULL;
 				}
+				ret = 1;
 			} else if (len == -1) {
 				if (conn->pkt == NULL)
 					fprintf(stderr, "out of memory allocating packet buffer!\n");
@@ -821,6 +833,7 @@ dispatch_connection(connection *conn, dispatcher *self)
 						conn->sock, len, strerror(errno));
 #endif
 				conn->state = QUIT;
+				ret = 1;
 			} else {
 				ret = len != -2;
 			}
