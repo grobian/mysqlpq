@@ -671,8 +671,10 @@ dispatch_connection(connection *conn, dispatcher *self)
 				} else if (ready > -1) {
 					connection *c = &connections[conn->upstreams[ready]];
 					assert(c->needpkt);
-					if (!conn->resultsent)
+					if (!conn->resultsent) {
 						packetbuf_forward(c->pkt, conn->sock);
+						conn->resultsent = 1;
+					}
 					free(c->pkt);
 					c->pkt = NULL;
 					c->state = HANDLED;
