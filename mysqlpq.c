@@ -94,9 +94,7 @@ do_usage(int exitcode)
 	printf("  -v  print version and exit\n");
 	printf("  -f  read <config> for backends\n");
 	printf("  -p  listen on <port> for connections, defaults to 3306\n");
-	printf("  -w  user <workers> worker threads, defaults to 16\n");
-	printf("  -b  server send batch size, defaults to 2500\n");
-	printf("  -q  server queue size, defaults to 25000\n");
+	printf("  -w  use <workers> worker threads, defaults to 16\n");
 	printf("  -d  debug mode: currently writes statistics to stdout\n");
 	printf("  -H  hostname: override hostname (used in statistics)\n");
 
@@ -118,8 +116,6 @@ main(int argc, char * const argv[])
 	char workercnt = 0;
 	char *config = NULL;
 	unsigned short listenport = 3306;
-	int batchsize = 2500;
-	int queuesize = 25000;
 	enum rmode mode = mNORMAL;
 	int ch;
 	char nowbuf[24];
@@ -153,20 +149,6 @@ main(int argc, char * const argv[])
 					do_usage(1);
 				}
 				break;
-			case 'b':
-				batchsize = atoi(optarg);
-				if (batchsize <= 0) {
-					fprintf(stderr, "error: batch size needs to be a number >0\n");
-					do_usage(1);
-				}
-				break;
-			case 'q':
-				queuesize = atoi(optarg);
-				if (queuesize <= 0) {
-					fprintf(stderr, "error: queue size needs to be a number >0\n");
-					do_usage(1);
-				}
-				break;
 			case 'H':
 				snprintf(mysqlpq_hostname, sizeof(mysqlpq_hostname), "%s", optarg);
 				break;
@@ -193,20 +175,12 @@ main(int argc, char * const argv[])
 	if (workercnt == 0)
 		workercnt = 16;
 
-	/* any_of failover maths need batchsize to be smaller than queuesize */
-	if (batchsize > queuesize) {
-		fprintf(stderr, "error: batchsize must be smaller than queuesize\n");
-		exit(-1);
-	}
-
 	fprintf(stdout, "[%s] starting mysqlpq v%s (%s)\n",
 		fmtnow(nowbuf), VERSION, GIT_VERSION);
 	fprintf(stdout, "configuration:\n");
 	fprintf(stdout, "    mysqlpq hostname = %s\n", mysqlpq_hostname);
 	fprintf(stdout, "    listen port = %u\n", listenport);
 	fprintf(stdout, "    workers = %d\n", workercnt);
-	fprintf(stdout, "    send batch size = %d\n", batchsize);
-	fprintf(stdout, "    server queue size = %d\n", queuesize);
 	if (mode == mDEBUG)
 		fprintf(stdout, "    debug = true\n");
 	fprintf(stdout, "    configuration = %s\n", config);
@@ -352,7 +326,7 @@ main(int argc, char * const argv[])
 	fprintf(stdout, " (%s)\n", fmtnow(nowbuf));
 	fflush(stdout);
 
-	fprintf(stdout, "[%s] routing stopped\n", fmtnow(nowbuf));
+	fprintf(stdout, "[%s] proxy stopped\n", fmtnow(nowbuf));
 	fflush(stdout);
 
 	fflush(stderr);  /* ensure all of our termination messages are out */
