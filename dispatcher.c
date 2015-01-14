@@ -88,7 +88,7 @@ typedef struct _dispatcher {
 	pthread_t tid;
 	enum conntype type;
 	char id;
-	size_t metrics;
+	size_t queries;
 	size_t ticks;
 	enum { RUNNING, SLEEPING } state;
 	char keep_running:1;
@@ -226,7 +226,7 @@ dispatch_addconnection(int sock, enum connstate istate)
 }
 
 static void
-handle_packet(connection *conn)
+handle_packet(dispatcher *self, connection *conn)
 {
 	switch (conn->state) {
 		case RECVHANDSHAKEV10:
@@ -275,6 +275,7 @@ handle_packet(connection *conn)
 			}
 			break;
 		case INPUT:
+			self->queries++;
 			conn->seq = packetbuf_hdr_seq(conn->pkt);
 
 			switch (conn->pkt->buf[0]) {
@@ -821,7 +822,7 @@ dispatch_connection(connection *conn, dispatcher *self)
 			if ((len = packetbuf_recv_data(&conn->pkt, conn->sock)) > 0) {
 				/* packet done, deal with it */
 				conn->needpkt = 0;
-				handle_packet(conn);
+				handle_packet(self, conn);
 				if (!conn->needpkt) {
 					packetbuf_free(conn->pkt);
 					conn->pkt = NULL;
@@ -863,7 +864,7 @@ dispatch_runner(void *arg)
 	int work;
 	int c;
 
-	self->metrics = 0;
+	self->queries = 0;
 	self->ticks = 0;
 	self->state = SLEEPING;
 
@@ -1013,12 +1014,12 @@ dispatch_get_ticks(dispatcher *self)
 }
 
 /**
- * Returns the number of metrics dispatched since start.
+ * Returns the number of queries dispatched since start.
  */
 inline size_t
-dispatch_get_metrics(dispatcher *self)
+dispatch_get_queries(dispatcher *self)
 {
-	return self->metrics;
+	return self->queries;
 }
 
 /**
