@@ -26,6 +26,7 @@
 #include "mysqlpq.h"
 #include "receptor.h"
 #include "dispatcher.h"
+#include "collector.h"
 
 int keep_running = 1;
 char mysqlpq_hostname[128];
@@ -101,11 +102,6 @@ do_usage(int exitcode)
 	exit(exitcode);
 }
 
-enum rmode {
-	mNORMAL,
-	mDEBUG
-};
-
 int
 main(int argc, char * const argv[])
 {
@@ -116,7 +112,7 @@ main(int argc, char * const argv[])
 	char workercnt = 0;
 	char *config = NULL;
 	unsigned short listenport = 3306;
-	enum rmode mode = mNORMAL;
+	char mode = 0;
 	int ch;
 	char nowbuf[24];
 	time_t now;
@@ -130,7 +126,7 @@ main(int argc, char * const argv[])
 				do_version();
 				break;
 			case 'd':
-				mode = mDEBUG;
+				mode = 1;
 				break;
 			case 'f':
 				config = optarg;
@@ -181,7 +177,7 @@ main(int argc, char * const argv[])
 	fprintf(stdout, "    mysqlpq hostname = %s\n", mysqlpq_hostname);
 	fprintf(stdout, "    listen port = %u\n", listenport);
 	fprintf(stdout, "    workers = %d\n", workercnt);
-	if (mode == mDEBUG)
+	if (mode)
 		fprintf(stdout, "    debug = true\n");
 	fprintf(stdout, "    configuration = %s\n", config);
 	fprintf(stdout, "\n");
@@ -288,8 +284,7 @@ main(int argc, char * const argv[])
 	}
 
 	fprintf(stdout, "starting statistics collector\n");
-//	collector_start((void **)&workers[1], (void **)servers, mode,
-//			internal_submission);
+	collector_start(&workers[1], mode, NULL);
 
 	fflush(stdout);  /* ensure all info stuff up here is out of the door */
 
@@ -307,9 +302,9 @@ main(int argc, char * const argv[])
 			fmtnow(nowbuf), listenport);
 	fflush(stdout);
 	/* since workers will be freed, stop querying the structures */
-//	collector_stop();
-//	fprintf(stdout, "[%s] collector stopped\n", fmtnow(nowbuf));
-//	fflush(stdout);
+	collector_stop();
+	fprintf(stdout, "[%s] collector stopped\n", fmtnow(nowbuf));
+	fflush(stdout);
 	/* give a little time for whatever the collector/aggregator wrote,
 	 * to be delivered by the dispatchers */
 	usleep(500 * 1000);  /* 500ms */

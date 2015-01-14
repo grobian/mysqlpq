@@ -31,6 +31,7 @@ OBJS = \
 	mysqlpq.o \
 	receptor.o \
 	dispatcher.o \
+	collector.o \
 	mysqlproto.o
 
 mysqlpq: $(OBJS)

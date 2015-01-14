@@ -34,6 +34,7 @@
 #include "mysqlpq.h"
 #include "collector.h"
 #include "mysqlproto.h"
+#include "dispatcher.h"
 
 enum conntype {
 	LISTENER,
@@ -84,7 +85,7 @@ typedef struct _connection {
 	int upstream;
 } connection;
 
-typedef struct _dispatcher {
+struct _dispatcher {
 	pthread_t tid;
 	enum conntype type;
 	char id;
@@ -92,7 +93,7 @@ typedef struct _dispatcher {
 	size_t ticks;
 	enum { RUNNING, SLEEPING } state;
 	char keep_running:1;
-} dispatcher;
+};
 
 static connection *listeners[32];       /* hopefully enough */
 static connection *connections = NULL;
