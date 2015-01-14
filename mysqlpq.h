@@ -18,7 +18,7 @@
 #ifndef HAVE_MYSQLPQ_H
 #define HAVE_MYSQLPQ_H 1
 
-#define VERSION "0.1"
+#define VERSION "0.2"
 
 extern char mysqlpq_hostname[];
 extern char *connect_username;
