@@ -338,27 +338,17 @@ handle_packet(dispatcher *self, connection *conn)
 
 						if (strcmp(feature + 8, "allresults") == 0) {
 							/* enable returning all results */
-							if (conn->props.capabilities &
-									CLIENT_MULTI_STATEMENTS)
-							{
-								mysql_ok ok;
+							mysql_ok ok;
 
-								conn->sendallresults = 1;
-								ok.affrows = 0;
-								ok.lastid = 0;
-								ok.status_flags = SERVER_STATUS_AUTOCOMMIT;
-								ok.warnings = 0;
-								ok.status_info = "multi-statements enabled";
-								ok.session_state_info = NULL;
-								send_ok(conn->sock, ++conn->seq,
-										conn->props.capabilities, &ok);
-							} else {
-								/* client doesn't support this */
-								send_err(conn->sock, ++conn->seq,
-										conn->props.capabilities,
-										"PQ003", "Client does not support "
-										"multi-statements");
-							}
+							conn->sendallresults = 1;
+							ok.affrows = 0;
+							ok.lastid = 0;
+							ok.status_flags = SERVER_STATUS_AUTOCOMMIT;
+							ok.warnings = 0;
+							ok.status_info = "result merging enabled";
+							ok.session_state_info = NULL;
+							send_ok(conn->sock, ++conn->seq,
+									conn->props.capabilities, &ok);
 						} else if (strcmp(feature + 8, "firstresult") == 0) {
 							/* only return first result (default) */
 							mysql_ok ok;
@@ -368,7 +358,7 @@ handle_packet(dispatcher *self, connection *conn)
 							ok.lastid = 0;
 							ok.status_flags = SERVER_STATUS_AUTOCOMMIT;
 							ok.warnings = 0;
-							ok.status_info = "multi-statements disabled";
+							ok.status_info = "result merging disabled";
 							ok.session_state_info = NULL;
 							send_ok(conn->sock, ++conn->seq,
 									conn->props.capabilities, &ok);
