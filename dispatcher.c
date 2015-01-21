@@ -732,7 +732,10 @@ dispatch_connection(connection *conn, dispatcher *self)
 
 						free(eof);
 					} else {
+						/* delay this for below, we need to skip the EOF
+						 * when using feature:allresults
 						c->goteof = 1;
+						 */
 					}
 					break;
 				case RESULT:
@@ -771,6 +774,9 @@ dispatch_connection(connection *conn, dispatcher *self)
 
 				packetbuf_free(c->pkt);
 				c->pkt = NULL;
+				/* delayed set, see above */
+				if (c->state == RESULT_EOF)
+					c->goteof = 1;
 				if (done) {
 					c->state = HANDLED;
 					conn->resultsent = 1;
