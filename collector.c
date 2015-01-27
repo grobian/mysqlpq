@@ -19,7 +19,11 @@
 #include <unistd.h>
 #include <string.h>
 #include <time.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netdb.h>
 #include <pthread.h>
+#include <errno.h>
 
 #include "mysqlpq.h"
 #include "dispatcher.h"
@@ -49,6 +53,12 @@ collector_runner(void *s)
 	char metric[2048];
 	char *m;
 	size_t sizem = 0;
+	int sock;
+	char use_udp = 0;
+	char *ip;
+	char sport[16];
+	struct addrinfo hint;
+	struct addrinfo *saddrs;
 
 	/* prepare hostname for graphite metrics */
 	snprintf(metric, sizeof(metric), "mysql.pq.%s", mysqlpq_hostname);
@@ -63,7 +73,7 @@ collector_runner(void *s)
 	if (debug) \
 		fprintf(stdout, "%s", metric); \
 	else \
-		fprintf(stdout, "%s", metric);  /* for the time being */
+		write(sock, metric, strlen(metric));
 
 	nextcycle = time(NULL) + collector_interval;
 	while (keep_running) {
@@ -72,6 +82,38 @@ collector_runner(void *s)
 		if (nextcycle > now)
 			continue;
 		nextcycle += collector_interval;
+
+		/* resolve + open connection */
+		memset(&hint, 0, sizeof(hint));
+		use_udp = 1;
+		hint.ai_family = PF_UNSPEC;
+		hint.ai_socktype = use_udp ? SOCK_DGRAM : SOCK_STREAM;
+		hint.ai_protocol = use_udp ? IPPROTO_UDP : IPPROTO_TCP;
+		hint.ai_flags = AI_NUMERICSERV;
+		snprintf(sport, sizeof(sport), "%u", 3002);  /* for default */
+		ip = "127.0.0.1";
+
+		if ((i = getaddrinfo(ip, sport, &hint, &saddrs)) != 0) {
+			fprintf(stderr, "failed to resolve server %s:%s (%s): %s\n",
+					ip, sport, use_udp ? "udp" : "tcp", gai_strerror(i));
+			continue;
+		}
+		if ((sock = socket(saddrs->ai_family,
+						saddrs->ai_socktype,
+						saddrs->ai_protocol)) < 0)
+		{
+			fprintf(stderr, "failed to create socket: %s\n", strerror(errno));
+			freeaddrinfo(saddrs);
+			continue;
+		}
+		if (connect(sock, saddrs->ai_addr, saddrs->ai_addrlen) < 0) {
+			fprintf(stderr, "failed to connect socket: %s\n", strerror(errno));
+			close(sock);
+			freeaddrinfo(saddrs);
+			continue;
+		}
+		freeaddrinfo(saddrs);
+
 		totticks = 0;
 		totqueries = 0;
 		dispatchers_idle = 0;
@@ -104,8 +146,11 @@ collector_runner(void *s)
 				dispatchers_idle, (size_t)now);
 		send(metric);
 
-		if (debug)
+		if (debug) {
 			fflush(stdout);
+		} else {
+			close(sock);
+		}
 	}
 
 	return NULL;
