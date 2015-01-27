@@ -219,7 +219,7 @@ dispatch_addconnection(int sock, enum connstate istate)
 	connections[c].upstreamslen = 0;
 	connections[c].upstreams = NULL;
 	connections[c].needpkt = 0;
-	connections[c].sendallresults = 0;  /* login process of client breaks */
+	connections[c].sendallresults = 1;  /* merge results by default */
 	connections[c].takenby = 0;  /* now dispatchers will pick this one up */
 	acceptedconnections++;
 
