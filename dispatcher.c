@@ -483,7 +483,9 @@ dispatch_connection(connection *conn, dispatcher *self)
 							continue;
 						}
 
+						pthread_rwlock_unlock(&connectionslock);
 						c = dispatch_addconnection(fd, RECVHANDSHAKEV10);
+						pthread_rwlock_rdlock(&connectionslock);
 						if (c >= 0)
 							conn->upstreams[conn->upstreamslen++] = c;
 					}
