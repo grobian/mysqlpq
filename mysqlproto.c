@@ -584,8 +584,11 @@ recv_handshakev10(packetbuf *buf, connprops *conn)
 	char *auth2 = NULL;
 	char authlen;
 
-	if (shift_int1(buf) != 0x0a)
+	if (shift_int1(buf) != 0x0a) {
+		if (buf->len > 0)
+			buf->len--;
 		return NULL;
+	}
 	conn->sver = shift_string(buf);
 	conn->connid = shift_int4(buf);
 	auth1 = shift_fixed_string(buf, 8);

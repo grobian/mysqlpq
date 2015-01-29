@@ -232,7 +232,11 @@ handle_packet(dispatcher *self, connection *conn)
 	switch (conn->state) {
 		case RECVHANDSHAKEV10:
 			if (recv_handshakev10(conn->pkt, &conn->props) == NULL) {
-				fprintf(stderr, "failed to parse package from server\n");
+				char *err = recv_err(conn->pkt, 0);
+				fprintf(stderr, "failed to parse package from server, "
+						"server said: %s\n", err == NULL ? "<nothing>" : err);
+				if (err)
+					free(err);
 			} else {
 				conn->state = HANDSHAKEV10_RECEIVED;
 			}
