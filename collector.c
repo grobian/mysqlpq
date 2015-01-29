@@ -44,6 +44,8 @@ collector_runner(void *s)
 	int i;
 	size_t totticks;
 	size_t totqueries;
+	size_t totacceptedconns;
+	size_t totclosedconns;
 	size_t ticks;
 	size_t queries;
 	size_t dispatchers_idle;
@@ -138,6 +140,14 @@ collector_runner(void *s)
 		send(metric);
 		snprintf(m, sizem, "dispatch_wallTime_us %zd %zd\n",
 				totticks, (size_t)now);
+		send(metric);
+		totacceptedconns = dispatch_get_accepted_connections();
+		totclosedconns = dispatch_get_closed_connections();
+		snprintf(m, sizem, "acceptedConnections %zd %zd\n",
+				totacceptedconns, (size_t)now);
+		send(metric);
+		snprintf(m, sizem, "closedConnections %zd %zd\n",
+				totclosedconns, (size_t)now);
 		send(metric);
 		snprintf(m, sizem, "dispatch_busy %zd %zd\n",
 				dispatchers_busy, (size_t)now);
