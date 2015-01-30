@@ -80,6 +80,7 @@ typedef struct _connection {
 	int *upstreams;
 	unsigned char goteof:1;
 	unsigned char resultsent:1;
+	unsigned char resultsmisaligned:1;
 	long long int resultcols;
 	int results;
 	int upstream;
@@ -603,6 +604,7 @@ dispatch_connection(connection *conn, dispatcher *self)
 				packetbuf_free(conn->pkt);
 				conn->pkt = NULL;
 				conn->resultsent = 0;
+				conn->resultsmisaligned = 0;
 				conn->state = QUERY_FORWARDED;
 				ret = 1;
 				break;
@@ -654,8 +656,8 @@ dispatch_connection(connection *conn, dispatcher *self)
 					} else if (conn->sendallresults &&
 							conn->resultcols != recv_field_count(c->pkt))
 					{
-						conn->sendallresults = 0;
-						fprintf(stderr, "fd %d: disabling feature allresults: "
+						conn->resultsmisaligned = 1;
+						fprintf(stderr, "fd %d: ignoring further results: "
 								"got two results with different column "
 								"counts\n", conn->sock);
 					}
@@ -772,8 +774,9 @@ dispatch_connection(connection *conn, dispatcher *self)
 				 *  eof|ok   done == 1
 				 */
 				if (conn->sendallresults) {
-					if ((!done && (!conn->resultsent ||
-								(conn->resultsent && c->goteof))) ||
+					if ((!done && !conn->resultsmisaligned &&
+								(!conn->resultsent ||
+								 (conn->resultsent && c->goteof))) ||
 							(done && conn->results == 1))
 						packetbuf_send(c->pkt, ++conn->seq, conn->sock);
 				} else if (!conn->resultsent) {
