@@ -38,6 +38,7 @@
 
 enum conntype {
 	LISTENER,
+	CONNECTOR,
 	CONNECTION
 };
 
@@ -47,6 +48,7 @@ enum connstate {
 	HANDSHAKEV10_RECEIVED,
 	RECVHANDSHAKERESPV10,
 	SENDHANDSHAKERESPV10,
+	WAITFORCONNECTOR,
 	WAITUPSTREAMCONNS,
 	LOGINOK,
 	AFTERLOGIN,
@@ -102,6 +104,8 @@ static size_t connectionslen = 0;
 pthread_rwlock_t connectionslock = PTHREAD_RWLOCK_INITIALIZER;
 static size_t acceptedconnections = 0;
 static size_t closedconnections = 0;
+static int ipc_read = -1;
+static int ipc_write = -1;
 
 
 /**
@@ -434,7 +438,10 @@ dispatch_connection(connection *conn, dispatcher *self)
 	gettimeofday(&start, NULL);
 
 	switch (conn->state) {
-		case SENDHANDSHAKEV10:
+		case SENDHANDSHAKEV10: {
+			int id = 0;
+			char nowbuf[24];
+
 			conn->props.sver = strdup("5.7-mysqlpq-" VERSION);
 			conn->props.status = SERVER_STATUS_AUTOCOMMIT;
 			conn->props.connid = (int)acceptedconnections;
@@ -443,73 +450,19 @@ dispatch_connection(connection *conn, dispatcher *self)
 			conn->props.auth = strdup("mysql_native_password");
 			conn->props.capabilities = CLIENT_BASIC_FLAGS;
 			send_handshakev10(conn->sock, conn->seq, &conn->props);
-			/* fork off connections to backends */
-			{
-				int fd;
-				char nowbuf[24];
-				int c;
-				int i;
-				struct addrinfo hints, *res, *res0;
-				int error;
-				const char *cause = NULL;
 
-				conn->upstreamslen = 0;
-				conn->upstreams = malloc(sizeof(int) * connect_host_cnt);
-
-				for (i = 0; i < connect_host_cnt; i++) {
-					memset(&hints, 0, sizeof(hints));
-					hints.ai_family = PF_UNSPEC;
-					hints.ai_socktype = SOCK_STREAM;
-					if ((error = getaddrinfo(connect_hosts[i], "3306",
-							&hints, &res0)) != 0)
-					{
-						fprintf(stderr, "[%s] failed to resolve %s: %s\n",
-								fmtnow(nowbuf), connect_hosts[i],
-								gai_strerror(error));
-						continue;
-					}
-
-					fd = -1;
-					for (res = res0; res; res = res->ai_next) {
-						if ((fd = socket(res->ai_family, res->ai_socktype,
-										res->ai_protocol)) < 0)
-						{
-							cause = "create";
-							fprintf(stderr, "[%s] failed to create socket: %s\n",
-									fmtnow(nowbuf), strerror(errno));
-							continue;
-						}
-
-
-						if (connect(fd, res->ai_addr, res->ai_addrlen) < 0) {
-							cause = "connect";
-							close(fd);
-							fd = -1;
-							continue;
-						}
-
-						pthread_rwlock_unlock(&connectionslock);
-						c = dispatch_addconnection(fd, RECVHANDSHAKEV10);
-						pthread_rwlock_rdlock(&connectionslock);
-						if (c >= 0)
-							conn->upstreams[conn->upstreamslen++] = c;
-					}
-					if (fd < 0) {
-						fprintf(stderr, "[%s] failed to %s socket for %s:3306: %s\n",
-								fmtnow(nowbuf), cause,
-								connect_hosts[i], strerror(errno));
-						break;
-					}
-					freeaddrinfo(res0);
-				}
+			id = (conn - connections) / sizeof(connection);
+			if (write(ipc_write, &id, sizeof(id)) != sizeof(id)) {
+				fprintf(stderr, "[%s] fd %d: failed to signal connector! %s\n",
+						fmtnow(nowbuf), conn->sock, strerror(errno));
 			}
-			conn->state = RECVHANDSHAKERESPV10;
+			conn->state = WAITFORCONNECTOR;
 			ret = 1;
-			break;
+		}	break;
 		case WAITUPSTREAMCONNS: {
 			int i;
 			char ok = 1;
-			
+
 			for (i = 0; i >= 0 && i < conn->upstreamslen; i++) {
 				connection *c = &connections[conn->upstreams[i]];
 				switch (c->state) {
@@ -824,6 +777,7 @@ dispatch_connection(connection *conn, dispatcher *self)
 		case RESULT_EOF:
 		case HANDLED:
 		case FAIL:
+		case WAITFORCONNECTOR:
 			break;
 		default: {
 			int len;
@@ -919,6 +873,89 @@ dispatch_runner(void *arg)
 				}
 			}
 		}
+	} else if (self->type == CONNECTOR) {
+		fd_set fds;
+		struct timeval tv;
+		while (self->keep_running) {
+			FD_ZERO(&fds);
+			tv.tv_sec = 0;
+			tv.tv_usec = 250 * 1000;  /* 250 ms */
+			FD_SET(ipc_read, &fds);
+			if (select(ipc_read + 1, &fds, NULL, NULL, &tv) > 0) {
+				int len;
+				int id;
+				int upstreamslen = 0;
+				int *upstreams;
+				int fd;
+				char nowbuf[24];
+				int c;
+				int i;
+				struct addrinfo hints, *res, *res0;
+				int error;
+				const char *cause = NULL;
+
+				if (!FD_ISSET(ipc_read, &fds))
+					continue;
+
+				len = read(ipc_read, &id, sizeof(id));
+				if (len != sizeof(id))
+					continue;
+
+				upstreamslen = 0;
+				upstreams = malloc(sizeof(int) * connect_host_cnt);
+
+				for (i = 0; i < connect_host_cnt; i++) {
+					memset(&hints, 0, sizeof(hints));
+					hints.ai_family = PF_UNSPEC;
+					hints.ai_socktype = SOCK_STREAM;
+					if ((error = getaddrinfo(connect_hosts[i], "3306",
+							&hints, &res0)) != 0)
+					{
+						fprintf(stderr, "[%s] failed to resolve %s: %s\n",
+								fmtnow(nowbuf), connect_hosts[i],
+								gai_strerror(error));
+						continue;
+					}
+
+					fd = -1;
+					for (res = res0; res; res = res->ai_next) {
+						if ((fd = socket(res->ai_family, res->ai_socktype,
+										res->ai_protocol)) < 0)
+						{
+							cause = "create";
+							fprintf(stderr, "[%s] failed to create socket: %s\n",
+									fmtnow(nowbuf), strerror(errno));
+							continue;
+						}
+
+
+						if (connect(fd, res->ai_addr, res->ai_addrlen) < 0) {
+							cause = "connect";
+							close(fd);
+							fd = -1;
+							continue;
+						}
+
+						c = dispatch_addconnection(fd, RECVHANDSHAKEV10);
+						if (c >= 0)
+							upstreams[upstreamslen++] = c;
+					}
+					if (fd < 0) {
+						fprintf(stderr, "[%s] failed to %s socket for %s:3306: %s\n",
+								fmtnow(nowbuf), cause,
+								connect_hosts[i], strerror(errno));
+						break;
+					}
+					freeaddrinfo(res0);
+				}
+
+				pthread_rwlock_rdlock(&connectionslock);
+				connections[id].upstreams = upstreams;
+				connections[id].upstreamslen = upstreamslen;
+				connections[id].state = RECVHANDSHAKERESPV10;
+				pthread_rwlock_unlock(&connectionslock);
+			}
+		}
 	} else if (self->type == CONNECTION) {
 		while (self->keep_running) {
 			work = 0;
@@ -957,6 +994,17 @@ dispatch_new(char id, enum conntype type)
 	if (ret == NULL)
 		return NULL;
 
+	if (ipc_read == -1 && ipc_write == -1) {
+		int fds[2];
+		if (pipe(fds) != 0) {
+			fprintf(stderr, "failed to create IPC!\n");
+			free(ret);
+			return NULL;
+		}
+		ipc_read = fds[0];
+		ipc_write = fds[1];
+	}
+
 	ret->id = id;
 	ret->type = type;
 	ret->keep_running = 1;
@@ -979,6 +1027,18 @@ dispatch_new_listener(void)
 {
 	char id = __sync_fetch_and_add(&globalid, 1);
 	return dispatch_new(id, LISTENER);
+}
+
+/**
+ * Starts a new dispatcher specialised in handling initiating outbound
+ * connections (and putting them in the upstreams list of the requesting
+ * connection).
+ */
+dispatcher *
+dispatch_new_connector(void)
+{
+	char id = __sync_fetch_and_add(&globalid, 1);
+	return dispatch_new(id, CONNECTOR);
 }
 
 /**

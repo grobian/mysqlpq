@@ -268,9 +268,11 @@ main(int argc, char * const argv[])
 	}
 	if ((workers[0] = dispatch_new_listener()) == NULL)
 		fprintf(stderr, "failed to add listener\n");
+	if ((workers[1] = dispatch_new_connector()) == NULL)
+		fprintf(stderr, "failed to add connector\n");
 
 	fprintf(stdout, "starting %d workers\n", workercnt);
-	for (id = 1; id < 1 + workercnt; id++) {
+	for (id = 2; id < 2 + workercnt; id++) {
 		workers[id + 0] = dispatch_new_connection();
 		if (workers[id + 0] == NULL) {
 			fprintf(stderr, "failed to add worker %d\n", id);
@@ -278,13 +280,13 @@ main(int argc, char * const argv[])
 		}
 	}
 	workers[id + 0] = NULL;
-	if (id < 1 + workercnt) {
+	if (id < 2 + workercnt) {
 		fprintf(stderr, "shutting down due to errors\n");
 		keep_running = 0;
 	}
 
 	fprintf(stdout, "starting statistics collector\n");
-	collector_start(&workers[1], mode, NULL);
+	collector_start(&workers[2], mode, NULL);
 
 	fflush(stdout);  /* ensure all info stuff up here is out of the door */
 
@@ -311,9 +313,9 @@ main(int argc, char * const argv[])
 	/* make sure we don't write to our servers any more */
 	fprintf(stdout, "[%s] stopped worker", fmtnow(nowbuf));
 	fflush(stdout);
-	for (id = 0; id < 1 + workercnt; id++)
+	for (id = 0; id < 2 + workercnt; id++)
 		dispatch_stop(workers[id + 0]);
-	for (id = 0; id < 1 + workercnt; id++) {
+	for (id = 0; id < 2 + workercnt; id++) {
 		dispatch_shutdown(workers[id + 0]);
 		fprintf(stdout, " %d", id + 1);
 		fflush(stdout);
