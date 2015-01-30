@@ -227,6 +227,9 @@ packetbuf_recv_data(packetbuf **ret, int fd)
 					fd, wantlen, packetbuf_hdr_seq(buf), *buf->buf);
 #endif
 		return buf->len += readlen;
+	} else if (readlen == 0) {
+		/* EOF */
+		return -3;
 	} else if (readlen == -1 &&
 			(errno == EINTR ||
 			 errno == EAGAIN ||

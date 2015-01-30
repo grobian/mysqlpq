@@ -845,8 +845,9 @@ dispatch_connection(connection *conn, dispatcher *self)
 #endif
 				conn->state = QUIT;
 				ret = 1;
-			} else {
-				ret = len != -2;
+			} else if (len == -3) {
+				conn->state = QUIT;
+				ret = 1;
 			}
 		}	break;
 	}
