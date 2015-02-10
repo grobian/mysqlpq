@@ -242,6 +242,7 @@ handle_packet(dispatcher *self, connection *conn)
 						"server said: %s\n", err == NULL ? "<nothing>" : err);
 				if (err)
 					free(err);
+				conn->state = QUIT;
 			} else {
 				conn->state = HANDSHAKEV10_RECEIVED;
 			}
@@ -800,7 +801,7 @@ dispatch_connection(connection *conn, dispatcher *self)
 #endif
 				conn->state = QUIT;
 				ret = 1;
-			} else if (len == -3) {
+			} else if (len == -3) { /* EOF */
 				conn->state = QUIT;
 				ret = 1;
 			}
