@@ -246,11 +246,20 @@ handle_packet(dispatcher *self, connection *conn)
 				conn->state = HANDSHAKEV10_RECEIVED;
 			}
 			break;
-		case RECVHANDSHAKERESPV10:
+		case RECVHANDSHAKERESPV10: {
+			int id = 0;
+			char nowbuf[24];
+
 			recv_handshakeresponsev41(conn->pkt, &conn->props);
 			conn->seq++;
-			conn->state = WAITUPSTREAMCONNS;
-			break;
+
+			id = (conn - connections) / sizeof(connection);
+			if (write(ipc_write, &id, sizeof(id)) != sizeof(id)) {
+				fprintf(stderr, "[%s] fd %d: failed to signal connector! %s\n",
+						fmtnow(nowbuf), conn->sock, strerror(errno));
+			}
+			conn->state = WAITFORCONNECTOR;
+		}	break;
 		case AFTERLOGIN:
 			switch (conn->pkt->buf[0]) {
 				case MYSQL_OK:
@@ -438,10 +447,7 @@ dispatch_connection(connection *conn, dispatcher *self)
 	gettimeofday(&start, NULL);
 
 	switch (conn->state) {
-		case SENDHANDSHAKEV10: {
-			int id = 0;
-			char nowbuf[24];
-
+		case SENDHANDSHAKEV10:
 			conn->props.sver = strdup("5.7-mysqlpq-" VERSION);
 			conn->props.status = SERVER_STATUS_AUTOCOMMIT;
 			conn->props.connid = (int)acceptedconnections;
@@ -451,14 +457,9 @@ dispatch_connection(connection *conn, dispatcher *self)
 			conn->props.capabilities = CLIENT_BASIC_FLAGS;
 			send_handshakev10(conn->sock, conn->seq, &conn->props);
 
-			id = (conn - connections) / sizeof(connection);
-			if (write(ipc_write, &id, sizeof(id)) != sizeof(id)) {
-				fprintf(stderr, "[%s] fd %d: failed to signal connector! %s\n",
-						fmtnow(nowbuf), conn->sock, strerror(errno));
-			}
-			conn->state = WAITFORCONNECTOR;
+			conn->state = RECVHANDSHAKERESPV10;
 			ret = 1;
-		}	break;
+			break;
 		case WAITUPSTREAMCONNS: {
 			int i;
 			char ok = 1;
@@ -952,7 +953,7 @@ dispatch_runner(void *arg)
 				pthread_rwlock_rdlock(&connectionslock);
 				connections[id].upstreams = upstreams;
 				connections[id].upstreamslen = upstreamslen;
-				connections[id].state = RECVHANDSHAKERESPV10;
+				connections[id].state = WAITUPSTREAMCONNS;
 				pthread_rwlock_unlock(&connectionslock);
 			}
 		}
