@@ -781,6 +781,8 @@ dispatch_connection(connection *conn, dispatcher *self)
 				conn->upstreamslen--;
 				connections[conn->upstreams[conn->upstreamslen]].state = QUIT;
 			}
+			if (conn->upstreams)
+				free(conn->upstreams);
 
 			/* cleanup props */
 #define free_prop_if_set(X) \
