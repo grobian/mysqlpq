@@ -484,6 +484,14 @@ dispatch_connection(connection *conn, dispatcher *self)
 							NULL : strdup(conn->props.dbname);
 						c->props.maxpktsize = conn->props.maxpktsize;
 						c->state = SENDHANDSHAKERESPV10;
+						if (c->props.username == NULL ||
+								c->props.passwd == NULL ||
+								c->props.auth == NULL)
+						{
+							fprintf(stderr, "fd %d: out of memory allocating "
+									"connection properties\n", c->sock);
+							c->state = FAIL;
+						}
 						ok = 0;
 						break;
 					default:
@@ -767,6 +775,19 @@ dispatch_connection(connection *conn, dispatcher *self)
 				conn->upstreamslen--;
 				connections[conn->upstreams[conn->upstreamslen]].state = QUIT;
 			}
+
+			/* cleanup props */
+#define free_prop_if_set(X) \
+			if (conn->props.X) \
+				free(conn->props.X);
+			free_prop_if_set(sver);
+			free_prop_if_set(chal);
+			free_prop_if_set(auth);
+			free_prop_if_set(username);
+			free_prop_if_set(passwd);
+			free_prop_if_set(chalresponse);
+			free_prop_if_set(dbname);
+			free_prop_if_set(attrs);
 
 			/* flag this connection as no longer in use */
 			conn->takenby = -1;
