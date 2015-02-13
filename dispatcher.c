@@ -630,7 +630,7 @@ dispatch_connection(connection *conn, dispatcher *self)
 								"got two results with different column "
 								"counts\n", conn->sock);
 					}
-					free(c->pkt);
+					packetbuf_free(c->pkt);
 					c->pkt = NULL;
 					c->goteof = 0;
 					c->resultcols = conn->resultcols;
@@ -644,7 +644,7 @@ dispatch_connection(connection *conn, dispatcher *self)
 						packetbuf_forward(c->pkt, conn->sock);
 						conn->resultsent = 1;
 					}
-					free(c->pkt);
+					packetbuf_free(c->pkt);
 					c->pkt = NULL;
 					c->state = HANDLED;
 				} else if (fail > -1) {
@@ -654,7 +654,7 @@ dispatch_connection(connection *conn, dispatcher *self)
 						packetbuf_forward(c->pkt, conn->sock);
 						conn->resultsent = 1;
 					}
-					free(c->pkt);
+					packetbuf_free(c->pkt);
 					c->pkt = NULL;
 					c->state = HANDLED;
 				} else {
