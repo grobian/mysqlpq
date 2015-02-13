@@ -954,7 +954,6 @@ dispatch_runner(void *arg)
 							cause = "create";
 							fprintf(stderr, "[%s] failed to create socket: %s\n",
 									fmtnow(nowbuf), strerror(errno));
-							freeaddrinfo(res0);
 							continue;
 						}
 
@@ -963,7 +962,6 @@ dispatch_runner(void *arg)
 							cause = "connect";
 							close(fd);
 							fd = -1;
-							freeaddrinfo(res0);
 							continue;
 						}
 
@@ -971,14 +969,13 @@ dispatch_runner(void *arg)
 						if (c >= 0)
 							upstreams[upstreamslen++] = c;
 					}
+					freeaddrinfo(res0);
 					if (fd < 0) {
 						fprintf(stderr, "[%s] failed to %s socket for %s:3306: %s\n",
 								fmtnow(nowbuf), cause,
 								connect_hosts[i], strerror(errno));
-						freeaddrinfo(res0);
 						break;
 					}
-					freeaddrinfo(res0);
 				}
 
 				pthread_rwlock_rdlock(&connectionslock);
