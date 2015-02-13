@@ -249,7 +249,7 @@ main(int argc, char * const argv[])
 		return 1;
 	}
 
-	workers = malloc(sizeof(dispatcher *) * (1 + workercnt + 1));
+	workers = malloc(sizeof(dispatcher *) * (1 + workercnt + 2));
 	if (workers == NULL) {
 		fprintf(stderr, "failed to allocate memory for workers\n");
 		return 1;
