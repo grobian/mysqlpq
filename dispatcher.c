@@ -61,6 +61,7 @@ enum connstate {
 	QUERY_SENT,
 	QUERY_FORWARDED,
 	QUERY_ERR,
+	QUIT_ERR,
 	HANDLED,
 	RESULTSET,
 	QUIT
@@ -258,8 +259,12 @@ handle_packet(dispatcher *self, connection *conn)
 			if (write(ipc_write, &id, sizeof(id)) != sizeof(id)) {
 				fprintf(stderr, "[%s] fd %d: failed to signal connector! %s\n",
 						fmtnow(nowbuf), conn->sock, strerror(errno));
+				conn->state = QUIT_ERR;
+				conn->sqlstate = "PQ0005";
+				conn->errmsg = "Failed to signal internal worker";
+			} else {
+				conn->state = WAITFORCONNECTOR;
 			}
-			conn->state = WAITFORCONNECTOR;
 		}	break;
 		case AFTERLOGIN:
 			switch (conn->pkt->buf[0]) {
@@ -573,9 +578,10 @@ dispatch_connection(connection *conn, dispatcher *self)
 				break;
 			} /* fall through for err in first branch of if-case */
 		case QUERY_ERR:
+		case QUIT_ERR:
 			send_err(conn->sock, ++conn->seq, conn->props.capabilities,
 					conn->sqlstate, conn->errmsg);
-			conn->state = INPUT;
+			conn->state = conn->state == QUIT_ERR ? QUIT : INPUT;
 			ret = 1;
 			break;
 		case QUERY_FORWARDED: {
