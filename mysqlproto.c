@@ -592,6 +592,8 @@ recv_handshakev10(packetbuf *buf, connprops *conn)
 			buf->len--;
 		return NULL;
 	}
+	if (conn->sver)
+		free(conn->sver);
 	conn->sver = shift_string(buf);
 	conn->connid = shift_int4(buf);
 	auth1 = shift_fixed_string(buf, 8);
@@ -606,8 +608,12 @@ recv_handshakev10(packetbuf *buf, connprops *conn)
 		auth2 = shift_fixed_string(buf, authlen > 8 ? authlen - 8 : 0);
 	}
 	if (conn->capabilities & CLIENT_PLUGIN_AUTH) {
+		if (conn->auth)
+			free(conn->auth);
 		conn->auth = shift_string(buf);
 	}
+	if (conn->chal)
+		free(conn->chal);
 	if (auth2 != NULL) {
 		conn->chal = malloc(sizeof(char) * authlen);
 		snprintf(conn->chal, authlen, "%s%s", auth1, auth2);
@@ -750,6 +756,8 @@ recv_handshakeresponsev41(packetbuf *buf, connprops *props)
 	}
 	if (capabilities & CLIENT_CONNECT_ATTRS) {
 		long long int len = shift_length_int(buf);  /* keyslen */
+		if (props->attrs != NULL)
+			free(props->attrs);
 		props->attrs = shift_fixed_string(buf, len);
 	}
 

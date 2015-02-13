@@ -482,9 +482,17 @@ dispatch_connection(connection *conn, dispatcher *self)
 						 * means the server can send stuff after an OK
 						 * packet */
 						c->props.capabilities &= ~CLIENT_SESSION_TRACK;
+						if (c->props.username)
+							free(c->props.username);
 						c->props.username = strdup(connect_username);
+						if (c->props.passwd)
+							free(c->props.passwd);
 						c->props.passwd = strdup(connect_passwd);
+						if (c->props.auth)
+							free(c->props.auth);
 						c->props.auth = strdup("mysql_native_password");
+						if (c->props.dbname)
+							free(c->props.dbname);
 						c->props.dbname = conn->props.dbname == NULL ?
 							NULL : strdup(conn->props.dbname);
 						c->props.maxpktsize = conn->props.maxpktsize;
