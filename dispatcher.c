@@ -254,7 +254,7 @@ handle_packet(dispatcher *self, connection *conn)
 			recv_handshakeresponsev41(conn->pkt, &conn->props);
 			conn->seq++;
 
-			id = (conn - connections) / sizeof(connection);
+			id = conn - connections;
 			if (write(ipc_write, &id, sizeof(id)) != sizeof(id)) {
 				fprintf(stderr, "[%s] fd %d: failed to signal connector! %s\n",
 						fmtnow(nowbuf), conn->sock, strerror(errno));
