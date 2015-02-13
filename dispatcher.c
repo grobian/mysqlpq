@@ -47,7 +47,6 @@ enum connstate {
 	RECVHANDSHAKEV10,
 	HANDSHAKEV10_RECEIVED,
 	RECVHANDSHAKERESPV10,
-	SENDHANDSHAKERESPV10,
 	WAITFORCONNECTOR,
 	WAITUPSTREAMCONNS,
 	LOGINOK,
@@ -78,7 +77,7 @@ typedef struct _connection {
 	time_t wait;
 	enum connstate state;
 	char *sqlstate;
-	char *errmsg;
+	char errmsg[2048];
 	int upstreamslen;
 	int *upstreams;
 	unsigned char goteof:1;
@@ -227,7 +226,7 @@ dispatch_addconnection(int sock, enum connstate istate)
 	connections[c].needpkt = 0;
 	connections[c].sendallresults = 1;  /* merge results by default */
 	connections[c].takenby = 0;  /* now dispatchers will pick this one up */
-	acceptedconnections++;
+	__sync_fetch_and_add(&acceptedconnections, 1);
 
 	return c;
 }
@@ -261,7 +260,8 @@ handle_packet(dispatcher *self, connection *conn)
 						fmtnow(nowbuf), conn->sock, strerror(errno));
 				conn->state = QUIT_ERR;
 				conn->sqlstate = "PQ0005";
-				conn->errmsg = "Failed to signal internal worker";
+				snprintf(conn->errmsg, sizeof(conn->errmsg),
+						"Failed to signal internal worker");
 			} else {
 				conn->state = WAITFORCONNECTOR;
 			}
@@ -279,22 +279,28 @@ handle_packet(dispatcher *self, connection *conn)
 				case MYSQL_ERR: {
 					char *err;
 					err = recv_err(conn->pkt, conn->props.capabilities);
-					fprintf(stderr, "fd %d: [%d/%s] failed to login: %s\n",
+					snprintf(conn->errmsg, sizeof(conn->errmsg),
+							"fd %d: [%d/%s] failed to login: %s\n",
 							conn->sock, conn->props.connid,
 							conn->props.sver, err);
 					free(err);
+					conn->sqlstate = "PQ006";
 					conn->state = FAIL;
 				}	break;
 				case MYSQL_EOF:
-					fprintf(stderr, "fd %d: authswithrequest: %s, %s\n",
+					snprintf(conn->errmsg, sizeof(conn->errmsg),
+							"fd %d: authswithrequest: %s, %s\n",
 							conn->sock,
 							&conn->pkt->buf[1],
 							&conn->pkt->buf[1 + strlen((char *)&conn->pkt->buf[1]) + 1]);
+					conn->sqlstate = "PQ007";
 					conn->state = FAIL;
 					break;
 				default:
-					fprintf(stderr, "fd %d: unhandled response after "
+					snprintf(conn->errmsg, sizeof(conn->errmsg),
+							"fd %d: unhandled response after "
 							"login: %X\n", conn->sock, conn->pkt->buf[0]);
+					conn->sqlstate = "PQ008";
 					conn->state = FAIL;
 					break;
 			}
@@ -474,7 +480,10 @@ dispatch_connection(connection *conn, dispatcher *self)
 				connection *c = &connections[conn->upstreams[i]];
 				switch (c->state) {
 					case READY:
+						break;
 					case FAIL:
+						conn->sqlstate = c->sqlstate;
+						memcpy(conn->errmsg, c->errmsg, sizeof(c->errmsg));
 						break;
 					case HANDSHAKEV10_RECEIVED:
 						c->props.capabilities &= conn->props.capabilities;
@@ -496,7 +505,6 @@ dispatch_connection(connection *conn, dispatcher *self)
 						c->props.dbname = conn->props.dbname == NULL ?
 							NULL : strdup(conn->props.dbname);
 						c->props.maxpktsize = conn->props.maxpktsize;
-						c->state = SENDHANDSHAKERESPV10;
 						if (c->props.username == NULL ||
 								c->props.passwd == NULL ||
 								c->props.auth == NULL)
@@ -504,8 +512,13 @@ dispatch_connection(connection *conn, dispatcher *self)
 							fprintf(stderr, "fd %d: out of memory allocating "
 									"connection properties\n", c->sock);
 							c->state = FAIL;
+							break;
 						}
 						ok = 0;
+						send_handshakeresponsev41(
+								c->sock, ++c->seq, &c->props);
+						c->state = AFTERLOGIN;
+						ret = 1;
 						break;
 					default:
 						ok = 0;
@@ -518,11 +531,6 @@ dispatch_connection(connection *conn, dispatcher *self)
 				ret = 1;
 			}
 		}	break;
-		case SENDHANDSHAKERESPV10:
-			send_handshakeresponsev41(conn->sock, ++conn->seq, &conn->props);
-			conn->state = AFTERLOGIN;
-			ret = 1;
-			break;
 		case LOGINOK: {
 			int i;
 			int ready = 0;
@@ -547,6 +555,10 @@ dispatch_connection(connection *conn, dispatcher *self)
 						break;
 				}
 			}
+			if (ready == 0) {
+				conn->state = QUIT_ERR;
+				break;
+			}
 			snprintf(info, sizeof(info), "Logged in with %d out of %d "
 					"upstream connections active\n",
 					ready, total);
@@ -560,31 +572,23 @@ dispatch_connection(connection *conn, dispatcher *self)
 			conn->state = INPUT;
 			ret = 1;
 		}	break;
-		case QUERY:
-			if (conn->upstreams == NULL || conn->upstreamslen == 0) {
-				packetbuf_free(conn->pkt);
-				conn->pkt = NULL;
-				conn->state = QUERY_ERR;
-				conn->sqlstate = "PQ002";
-				conn->errmsg = "No connected endpoints";
-			} else {
-				int i;
+		case QUERY: {
+			int i;
 
-				/* conn->pkt is the query pkt from the client, so we can
-				 * just send this to the upstream servers */
-				for (i = 0; i < conn->upstreamslen; i++) {
-					connection *c = &connections[conn->upstreams[i]];
-					packetbuf_forward(conn->pkt, c->sock);
-					c->state = QUERY_SENT;
-				}
-				packetbuf_free(conn->pkt);
-				conn->pkt = NULL;
-				conn->resultsent = 0;
-				conn->resultsmisaligned = 0;
-				conn->state = QUERY_FORWARDED;
-				ret = 1;
-				break;
-			} /* fall through for err in first branch of if-case */
+			/* conn->pkt is the query pkt from the client, so we can
+			 * just send this to the upstream servers */
+			for (i = 0; i < conn->upstreamslen; i++) {
+				connection *c = &connections[conn->upstreams[i]];
+				packetbuf_forward(conn->pkt, c->sock);
+				c->state = QUERY_SENT;
+			}
+			packetbuf_free(conn->pkt);
+			conn->pkt = NULL;
+			conn->resultsent = 0;
+			conn->resultsmisaligned = 0;
+			conn->state = QUERY_FORWARDED;
+			ret = 1;
+		} break;
 		case QUERY_ERR:
 		case QUIT_ERR:
 			send_err(conn->sock, ++conn->seq, conn->props.capabilities,
@@ -816,6 +820,7 @@ dispatch_connection(connection *conn, dispatcher *self)
 		case RESULT_EOF:
 		case HANDLED:
 		case FAIL:
+		case HANDSHAKEV10_RECEIVED:
 		case WAITFORCONNECTOR:
 			break;
 		default: {
