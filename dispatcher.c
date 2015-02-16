@@ -415,13 +415,12 @@ handle_packet(dispatcher *self, connection *conn)
 			}
 			break;
 		case QUERY_SENT:
+			conn->needpkt = 1;
 			switch (conn->pkt->buf[0]) {
 				case MYSQL_OK:
-					conn->needpkt = 1;
 					conn->state = READY;
 					break;
 				case MYSQL_ERR:
-					conn->needpkt = 1;
 					conn->state = FAIL;
 					break;
 				case MYSQL_EOF:
@@ -430,12 +429,10 @@ handle_packet(dispatcher *self, connection *conn)
 					 * must check whether the packet length is less than
 					 * 9 to make sure that it is a EOF packet */
 					if (packetbuf_hdr_len(conn->pkt) < 9) {
-						conn->needpkt = 1;
 						conn->state = RESULT_EOF;
 						break;
 					}
 				default:
-					conn->needpkt = 1;
 					conn->state = RESULT;
 					break;
 			}
