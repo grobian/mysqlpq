@@ -27,6 +27,7 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/resource.h>
+#include <netinet/tcp.h>
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <assert.h>
@@ -174,6 +175,7 @@ static int
 dispatch_addconnection(int sock, enum connstate istate)
 {
 	size_t c;
+	int flag = 1;
 
 	pthread_rwlock_rdlock(&connectionslock);
 	for (c = 0; c < connectionslen; c++)
@@ -215,6 +217,7 @@ dispatch_addconnection(int sock, enum connstate istate)
 	}
 
 	(void) fcntl(sock, F_SETFL, O_NONBLOCK);
+	(void) setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
 	connections[c].sock = sock;
 	connections[c].pkt = NULL;
 	memset(&connections[c].props, 0, sizeof(connprops));
