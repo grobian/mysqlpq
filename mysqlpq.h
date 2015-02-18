@@ -26,6 +26,7 @@ extern char *connect_passwd;
 extern char **connect_hosts;
 extern int connect_host_cnt;
 extern int startuptime;
+extern int workercnt;
 
 char *fmtnow(char nowbuf[24]);
 

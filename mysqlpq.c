@@ -35,6 +35,7 @@ char *connect_passwd = NULL;
 char **connect_hosts = NULL;
 int connect_host_cnt = 0;
 int startuptime = 0;
+int workercnt = 0;
 
 
 static void
@@ -109,7 +110,6 @@ main(int argc, char * const argv[])
 	int socklen = sizeof(sock) / sizeof(sock[0]);
 	char id;
 	dispatcher **workers;
-	char workercnt = 0;
 	char *config = NULL;
 	unsigned short listenport = 3306;
 	char mode = 0;
@@ -139,7 +139,7 @@ main(int argc, char * const argv[])
 				}
 				break;
 			case 'w':
-				workercnt = (char)atoi(optarg);
+				workercnt = atoi(optarg);
 				if (workercnt <= 0) {
 					fprintf(stderr, "error: workers needs to be a number >0\n");
 					do_usage(1);

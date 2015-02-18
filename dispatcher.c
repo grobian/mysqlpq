@@ -334,11 +334,13 @@ handle_packet(dispatcher *self, connection *conn)
 					time(&now);
 					snprintf(buf, sizeof(buf),
 							"Uptime: %d  "
+							"Threads: %d  "
 							"Accepted connections: %zd  "
 							"Closed connections: %zd  "
 							"Connected backends: %d"
 							,
 							(int)now - startuptime,
+							workercnt,
 							acceptedconnections,
 							closedconnections,
 							conn->upstreamslen
