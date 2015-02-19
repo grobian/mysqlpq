@@ -55,6 +55,7 @@ enum connstate {
 	INPUT,
 	READY,
 	RESULT,
+	RESULT_OK,
 	RESULT_EOF,
 	FAIL,
 	QUERY,
@@ -423,7 +424,7 @@ handle_packet(dispatcher *self, connection *conn)
 			conn->needpkt = 1;
 			switch (conn->pkt->buf[0]) {
 				case MYSQL_OK:
-					conn->state = READY;
+					conn->state = RESULT_OK;
 					break;
 				case MYSQL_ERR:
 					conn->state = FAIL;
@@ -586,6 +587,7 @@ dispatch_connection(connection *conn, dispatcher *self)
 			}
 			packetbuf_free(conn->pkt);
 			conn->pkt = NULL;
+			conn->needpkt = 0;
 			conn->resultsent = 0;
 			conn->resultsmisaligned = 0;
 			conn->state = QUERY_FORWARDED;
@@ -607,7 +609,7 @@ dispatch_connection(connection *conn, dispatcher *self)
 			conn->results = 0;
 			for (i = 0; i >= 0 && i < conn->upstreamslen; i++) {
 				switch (connections[conn->upstreams[i]].state) {
-					case READY:
+					case RESULT_OK:
 						ready = i;
 						break;
 					case FAIL:
@@ -693,7 +695,7 @@ dispatch_connection(connection *conn, dispatcher *self)
 			 * two versions (using EOF or not) the logic consists of
 			 * finding the second EOF or an OK/ERR. */
 			switch (c->state) {
-				case READY: {
+				case RESULT_OK: {
 					mysql_ok *ok = recv_ok(c->pkt, c->props.capabilities);
 					/* we should only see OK if the client doesn't
 					 * expect EOFs, so we can assume being done here */
@@ -819,6 +821,7 @@ dispatch_connection(connection *conn, dispatcher *self)
 			return 0;  /* unlikely new stuff has to be done for this conn */
 		case READY:
 		case RESULT:
+		case RESULT_OK:
 		case RESULT_EOF:
 		case HANDLED:
 		case FAIL:
